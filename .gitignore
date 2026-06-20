@@ -1,0 +1,4 @@
+.cache/
+build/
+third-party/tcl/unix/dltest/dltest
+__pycache__/

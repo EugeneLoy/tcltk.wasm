@@ -1,0 +1,67 @@
+ninja_required_version = 1.5
+
+builddir = build/emscripten
+prefix = $builddir/prefix
+emcache = $builddir/em-cache
+
+tcl_src = third-party/tcl
+tk_src = third-party/tk
+tcl_build = $builddir/tcl
+tk_build = $builddir/tk
+tcl_overlay_unix = $builddir/overlay/tcl/unix
+tcl_overlay_unix_stamp = $tcl_overlay_unix/.stamp
+tk_overlay_unix = $builddir/overlay/tk/unix
+tk_overlay_unix_stamp = $tk_overlay_unix/.stamp
+
+host = wasm32-unknown-emscripten
+common_configure = --host=$host --disable-shared --disable-load --disable-threads --disable-rpath --disable-corefoundation tcl_cv_sys_version=Emscripten
+tcl_configure = $common_configure --disable-dll-unloading --with-tzdata=no
+tk_configure = $common_configure --without-x --disable-xft --disable-xss
+
+rule overlay_tcl_unix
+  command = root=$$(pwd) && overlay="$$root/$tcl_overlay_unix" && mkdir -p "$$overlay" && for src in "$$root/$tcl_src/unix"/*; do ln -sf "$$src" "$$overlay/$${src##*/}"; done && for src in "$$root/browser/tcl/unix"/*; do [ -e "$$src" ] || continue; ln -sf "$$src" "$$overlay/$${src##*/}"; done && touch "$$root/$tcl_overlay_unix_stamp"
+  description = overlay Tcl unix backend
+  restat = 1
+
+rule overlay_tk_unix
+  command = root=$$(pwd) && overlay="$$root/$tk_overlay_unix" && mkdir -p "$$overlay" && for src in "$$root/$tk_src/unix"/*; do ln -sf "$$src" "$$overlay/$${src##*/}"; done && for src in "$$root/browser/tk/unix"/*; do [ -e "$$src" ] || continue; ln -sf "$$src" "$$overlay/$${src##*/}"; done && touch "$$root/$tk_overlay_unix_stamp"
+  description = overlay Tk unix backend
+  restat = 1
+
+rule configure_tcl
+  command = root=$$(pwd) && build_triple=$$(cc -dumpmachine 2>/dev/null || echo unknown-unknown-unknown) && mkdir -p "$$root/$tcl_build" "$$root/$prefix" "$$root/$emcache" && cd "$$root/$tcl_build" && EM_CACHE="$$root/$emcache" emconfigure "$$root/$tcl_src/unix/configure" --build="$$build_triple" --prefix="$$root/$prefix" $tcl_configure
+  description = configure Tcl
+
+rule build_tcl
+  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tcl_build" -j"$$jobs" UNIX_DIR="$$root/$tcl_overlay_unix" libtcl8.6.a && touch "$$root/$tcl_build/.built"
+  description = build Tcl
+
+rule configure_tk
+  command = root=$$(pwd) && build_triple=$$(cc -dumpmachine 2>/dev/null || echo unknown-unknown-unknown) && mkdir -p "$$root/$tk_build" "$$root/$prefix" "$$root/$emcache" && cd "$$root/$tk_build" && EM_CACHE="$$root/$emcache" emconfigure "$$root/$tk_src/unix/configure" --build="$$build_triple" --prefix="$$root/$prefix" --with-tcl="$$root/$tcl_build" $tk_configure
+  description = configure Tk
+
+rule build_tk
+  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tk_build" -j"$$jobs" UNIX_DIR="$$root/$tk_overlay_unix" libtk8.6.a && touch "$$root/$tk_build/.built"
+  description = build Tk
+
+rule compile_commands
+  command = python3 tools/gen_compile_commands.py --output build/compile_commands.json
+  description = generate build/compile_commands.json
+
+build $tcl_overlay_unix_stamp: overlay_tcl_unix build.ninja browser/tcl/unix/tclUnixTime.c
+build $tcl_build/Makefile: configure_tcl build.ninja
+build $tcl_build/.built: build_tcl $tcl_build/Makefile $tcl_overlay_unix_stamp
+
+build $tk_overlay_unix_stamp: overlay_tk_unix build.ninja browser/tk/unix/.gitkeep
+build $tk_build/Makefile: configure_tk $tcl_build/.built build.ninja
+build $tk_build/.built: build_tk $tk_build/Makefile $tk_overlay_unix_stamp
+build build/compile_commands.json: compile_commands tools/gen_compile_commands.py $tcl_build/Makefile $tk_build/Makefile $tcl_overlay_unix_stamp $tk_overlay_unix_stamp
+
+build configure-tcl: phony $tcl_build/Makefile
+build tcl: phony $tcl_build/.built
+build configure-tk: phony $tk_build/Makefile
+build tk: phony $tk_build/.built
+build compile_commands: phony build/compile_commands.json
+build all: phony tk
+
+default all
