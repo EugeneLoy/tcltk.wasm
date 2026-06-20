@@ -1,0 +1,6 @@
+[submodule "third-party/tcl"]
+	path = third-party/tcl
+	url = https://github.com/tcltk/tcl.git
+[submodule "third-party/tk"]
+	path = third-party/tk
+	url = https://github.com/tcltk/tk.git
