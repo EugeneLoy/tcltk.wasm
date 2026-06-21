@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": true
+  },
+  "include": [
+    "browser/tk/js/**/*.js",
+    "browser/tk/js/**/*.d.ts"
+  ]
+}

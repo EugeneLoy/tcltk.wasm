@@ -14,6 +14,7 @@ BUILD_TRIPLET ?= $(shell cc -dumpmachine 2>/dev/null || echo unknown-unknown-unk
 EMCONFIGURE ?= emconfigure
 EMMAKE ?= emmake
 EM_CACHE ?= $(BUILD_DIR)/em-cache
+CONFIGURE_TOOLS_DIR := $(ROOT)/tools/emscripten-configure-tools
 NINJA ?= ninja
 NINJA_FILE ?= build.ninja
 NPROC ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
@@ -31,7 +32,10 @@ COMMON_CONFIGURE_OPTS := \
 	--disable-rpath \
 	--disable-corefoundation
 
-COMMON_CONFIGURE_CACHE := tcl_cv_sys_version=Emscripten
+COMMON_CONFIGURE_CACHE := \
+	tcl_cv_sys_version=Emscripten \
+	ac_cv_func_strtoul=yes \
+	tcl_cv_strtoul_unbroken=ok
 
 TCL_CONFIGURE_OPTS ?= \
 	$(COMMON_CONFIGURE_OPTS) \
@@ -46,7 +50,7 @@ TK_CONFIGURE_OPTS ?= \
 	--disable-xss \
 	$(COMMON_CONFIGURE_CACHE)
 
-.PHONY: all ninja tcl tk configure-tcl configure-tk compile-commands compile_commands clean distclean
+.PHONY: all ninja tcl tk browser configure-tcl configure-tk compile-commands compile_commands typecheck-js clean distclean
 
 all: ninja
 
@@ -59,6 +63,9 @@ tcl:
 tk:
 	$(NINJA) -f $(NINJA_FILE) $(NINJAFLAGS) tk
 
+browser:
+	$(NINJA) -f $(NINJA_FILE) $(NINJAFLAGS) browser
+
 configure-tcl:
 	$(NINJA) -f $(NINJA_FILE) $(NINJAFLAGS) configure-tcl
 
@@ -68,13 +75,16 @@ configure-tk:
 compile-commands compile_commands:
 	$(NINJA) -f $(NINJA_FILE) $(NINJAFLAGS) compile_commands
 
+typecheck-js:
+	$(NINJA) -f $(NINJA_FILE) $(NINJAFLAGS) typecheck_js
+
 $(TCL_BUILD_DIR)/Makefile:
 	mkdir -p $(TCL_BUILD_DIR) $(PREFIX) $(EM_CACHE)
-	cd $(TCL_BUILD_DIR) && $(EMCONFIGURE) $(TCL_SRC_DIR)/unix/configure $(TCL_CONFIGURE_OPTS)
+	cd $(TCL_BUILD_DIR) && PATH="$(CONFIGURE_TOOLS_DIR):$$PATH" $(EMCONFIGURE) $(TCL_SRC_DIR)/unix/configure $(TCL_CONFIGURE_OPTS)
 
 $(TK_BUILD_DIR)/Makefile: $(TCL_BUILD_DIR)/Makefile
 	mkdir -p $(TK_BUILD_DIR) $(PREFIX) $(EM_CACHE)
-	cd $(TK_BUILD_DIR) && $(EMCONFIGURE) $(TK_SRC_DIR)/unix/configure $(TK_CONFIGURE_OPTS)
+	cd $(TK_BUILD_DIR) && PATH="$(CONFIGURE_TOOLS_DIR):$$PATH" $(EMCONFIGURE) $(TK_SRC_DIR)/unix/configure $(TK_CONFIGURE_OPTS)
 
 clean:
 	-$(MAKE) -C $(TCL_BUILD_DIR) clean

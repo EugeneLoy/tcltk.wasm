@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# uname shim for Tcl/Tk's older configure scripts.
+#
+# Their Unix configure logic still probes the build machine with uname(1)
+# even when --host is wasm32-unknown-emscripten. Put this directory first in
+# PATH while configuring so Darwin-only branches do not leak into the wasm
+# build.
+
+if [ "$#" -eq 0 ]; then
+    echo Emscripten
+    exit 0
+fi
+
+first=1
+for arg in "$@"; do
+    case "$arg" in
+    -a)
+        value="Emscripten browser 1.0 wasm32"
+        ;;
+    -s)
+        value="Emscripten"
+        ;;
+    -r)
+        value="1.0"
+        ;;
+    -v)
+        value="1"
+        ;;
+    -m|-p)
+        value="wasm32"
+        ;;
+    -n)
+        value="browser"
+        ;;
+    *)
+        value="Emscripten"
+        ;;
+    esac
+    if [ "$first" -eq 0 ]; then
+        printf ' '
+    fi
+    first=0
+    printf '%s' "$value"
+done
+printf '\n'

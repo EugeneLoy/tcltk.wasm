@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tcl/Tk WASM</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f6f7;
+      color: #1f2328;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 42px;
+      padding: 0 14px;
+      border-bottom: 1px solid #d8dee4;
+      background: #ffffff;
+    }
+
+    main {
+      min-height: 0;
+      padding: 16px;
+    }
+
+    #tk-browser-root {
+      width: min(100%, 1024px);
+      height: min(768px, calc(100vh - 78px));
+      border: 1px solid #d0d7de;
+      background: #ffffff;
+    }
+
+    #tk-browser-status {
+      color: #57606a;
+      font-size: 12px;
+    }
+
+    #tk-browser-result-panel {
+      margin-top: 12px;
+      max-width: 1024px;
+    }
+
+    #tk-browser-result-panel > span {
+      display: block;
+      margin-bottom: 4px;
+      color: #57606a;
+      font-size: 12px;
+    }
+
+    #tk-browser-result {
+      min-height: 20px;
+      margin: 0;
+      padding: 8px;
+      overflow: auto;
+      border: 1px solid #d0d7de;
+      background: #ffffff;
+      color: #1f2328;
+      font: 12px ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Tcl/Tk WASM</strong>
+    <span id="tk-browser-status">loading</span>
+  </header>
+  <main>
+    <div id="tk-browser-root"></div>
+    <section id="tk-browser-result-panel" aria-label="Tcl result">
+      <span>Result</span>
+      <pre id="tk-browser-result" data-code=""></pre>
+    </section>
+  </main>
+  <script>
+    function tkBrowserArgumentsFromLocation() {
+      const params = new URLSearchParams(window.location.search);
+      const args = [
+        ...params.getAll("argv"),
+        ...params.getAll("arg")
+      ];
+      const evalScript = params.get("eval");
+      if (evalScript !== null) {
+        args.push("--eval", evalScript);
+      }
+      return args;
+    }
+
+    var Module = {
+      tkBrowserRoot: "#tk-browser-root",
+      arguments: tkBrowserArgumentsFromLocation(),
+      print: function(text) {
+        console.log(text);
+      },
+      printErr: function(text) {
+        console.error(text);
+      }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
