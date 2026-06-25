@@ -8,13 +8,62 @@
 
 #include "tkUnixInt.h"
 #include "tkSelect.h"
-#include <X11Wasm/Runtime.h>
+
+#include "error.xbm"
+#include "info.xbm"
+#include "questhead.xbm"
+#include "question.xbm"
+#include "warning.xbm"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #else
 #define EMSCRIPTEN_KEEPALIVE
 #endif
+
+typedef struct TkBrowserNativeBitmap {
+    const char *name;
+    const unsigned char *bits;
+    int width;
+    int height;
+} TkBrowserNativeBitmap;
+
+static const TkBrowserNativeBitmap tkBrowserNativeBitmaps[] = {
+    {"accessory", info_bits, info_width, info_height},
+    {"application", info_bits, info_width, info_height},
+    {"caution", warning_bits, warning_width, warning_height},
+    {"cdrom", info_bits, info_width, info_height},
+    {"document", question_bits, question_width, question_height},
+    {"edition", question_bits, question_width, question_height},
+    {"floppy", info_bits, info_width, info_height},
+    {"folder", questhead_bits, questhead_width, questhead_height},
+    {"note", info_bits, info_width, info_height},
+    {"pfolder", questhead_bits, questhead_width, questhead_height},
+    {"preferences", info_bits, info_width, info_height},
+    {"querydoc", question_bits, question_width, question_height},
+    {"ramdisk", info_bits, info_width, info_height},
+    {"stationery", question_bits, question_width, question_height},
+    {"stop", error_bits, error_width, error_height},
+    {"trash", warning_bits, warning_width, warning_height},
+};
+
+static const TkBrowserNativeBitmap *
+TkBrowserFindNativeBitmap(
+    const char *name)
+{
+    size_t i;
+
+    if (name == NULL) {
+	return NULL;
+    }
+    for (i = 0; i < sizeof(tkBrowserNativeBitmaps)
+	    / sizeof(tkBrowserNativeBitmaps[0]); i++) {
+	if (strcmp(tkBrowserNativeBitmaps[i].name, name) == 0) {
+	    return &tkBrowserNativeBitmaps[i];
+	}
+    }
+    return NULL;
+}
 
 #undef XChangeProperty
 #undef XSetClassHint
@@ -267,7 +316,9 @@ TkpCreateNativeBitmap(
     Display *display,
     const void *source)
 {
-    return X11WasmCreateNativeBitmap(display, source);
+    (void)display;
+    (void)source;
+    return None;
 }
 
 Pixmap
@@ -277,7 +328,25 @@ TkpGetNativeAppBitmap(
     int *width,
     int *height)
 {
-    return X11WasmGetNativeAppBitmap(display, name, width, height);
+    const TkBrowserNativeBitmap *nativePtr = TkBrowserFindNativeBitmap(name);
+    Pixmap pixmap;
+
+    if (nativePtr == NULL) {
+	return None;
+    }
+    pixmap = XCreateBitmapFromData(display,
+	    RootWindow(display, DefaultScreen(display)),
+	    (const char *)nativePtr->bits, (unsigned int)nativePtr->width,
+	    (unsigned int)nativePtr->height);
+    if (pixmap != None) {
+	if (width != NULL) {
+	    *width = nativePtr->width;
+	}
+	if (height != NULL) {
+	    *height = nativePtr->height;
+	}
+    }
+    return pixmap;
 }
 
 EMSCRIPTEN_KEEPALIVE int
