@@ -59,21 +59,34 @@ TkBrowserSyncMetadataTargets(
 	    dispPtr = dispPtr->nextPtr) {
 	Tcl_HashEntry *hPtr;
 	Tcl_HashSearch search;
+	Atom rootToplevelAtom;
+	Atom targetAtom;
 
 	if ((display != NULL) && (dispPtr->display != display)) {
 	    continue;
 	}
+	targetAtom = XInternAtom(dispPtr->display,
+		"_X11_WASM_METADATA_TARGET", False);
+	rootToplevelAtom = XInternAtom(dispPtr->display,
+		"_X11_WASM_METADATA_ROOT_TOPLEVEL", False);
 	for (hPtr = Tcl_FirstHashEntry(&dispPtr->winTable, &search);
 		hPtr != NULL; hPtr = Tcl_NextHashEntry(&search)) {
 	    TkWindow *winPtr = (TkWindow *)Tcl_GetHashValue(hPtr);
 	    TkWindow *targetPtr = TkBrowserMetadataTarget(winPtr);
+	    unsigned int rootToplevelValue;
+	    unsigned int targetValue;
 
 	    if (targetPtr == NULL) {
 		continue;
 	    }
-	    (void)X11WasmSetWindowMetadataTarget(dispPtr->display,
-		    winPtr->window, targetPtr->window,
-		    TkBrowserIsRootToplevel(targetPtr));
+	    targetValue = (unsigned int)targetPtr->window;
+	    rootToplevelValue = TkBrowserIsRootToplevel(targetPtr) ? 1U : 0U;
+	    (void)XChangeProperty(dispPtr->display, winPtr->window,
+		    rootToplevelAtom, XA_CARDINAL, 32, PropModeReplace,
+		    (const unsigned char *)&rootToplevelValue, 1);
+	    (void)XChangeProperty(dispPtr->display, winPtr->window, targetAtom,
+		    XA_WINDOW, 32, PropModeReplace,
+		    (const unsigned char *)&targetValue, 1);
 	}
     }
 }
