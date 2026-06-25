@@ -6,3 +6,6 @@
 	path = third-party/tk
 	url = https://github.com/tcltk/tk.git
 	branch = core-8-6-branch
+[submodule "third-party/x11.wasm"]
+	path = third-party/x11.wasm
+	url = https://github.com/t3tra-dev/x11.wasm
