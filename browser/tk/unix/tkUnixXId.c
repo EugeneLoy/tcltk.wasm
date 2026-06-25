@@ -348,63 +348,89 @@ TkpScanWindowId(
     return code;
 }
 
-static TkClipboardTarget *
-TkBrowserClipboardTextTarget(
-    TkWindow *winPtr)
+static int
+TkBrowserDiscardClipboardSelection(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    const char *portion)
 {
-    TkClipboardTarget *targetPtr;
-    TkDisplay *dispPtr;
-    Atom utf8Atom;
-
-    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)) {
-	return NULL;
-    }
-    dispPtr = winPtr->dispPtr;
-    utf8Atom = Tk_InternAtom((Tk_Window)winPtr, "UTF8_STRING");
-    for (targetPtr = dispPtr->clipTargetPtr; targetPtr != NULL;
-	    targetPtr = targetPtr->nextPtr) {
-	if (targetPtr->type == utf8Atom) {
-	    return targetPtr;
-	}
-    }
-    for (targetPtr = dispPtr->clipTargetPtr; targetPtr != NULL;
-	    targetPtr = targetPtr->nextPtr) {
-	if (targetPtr->type == XA_STRING) {
-	    return targetPtr;
-	}
-    }
-    return NULL;
+    (void)clientData;
+    (void)interp;
+    (void)portion;
+    return TCL_OK;
 }
 
-static int
-TkBrowserCopyClipboardText(
-    TkWindow *winPtr,
-    Tcl_DString *clipboardPtr)
+static TkWindow *
+TkBrowserClipboardWindow(
+    TkWindow *winPtr)
 {
-    TkClipboardTarget *targetPtr;
-    TkClipboardBuffer *bufferPtr;
-
-    if ((winPtr == NULL) || (clipboardPtr == NULL)) {
-	return 0;
+    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)
+	    || (winPtr->dispPtr->clipWindow == NULL)) {
+	return NULL;
     }
-    targetPtr = TkBrowserClipboardTextTarget(winPtr);
-    if (targetPtr == NULL) {
-	return 0;
-    }
-    for (bufferPtr = targetPtr->firstBufferPtr; bufferPtr != NULL;
-	    bufferPtr = bufferPtr->nextPtr) {
-	const char *buffer = bufferPtr->buffer;
-	long remaining = bufferPtr->length;
+    return (TkWindow *)winPtr->dispPtr->clipWindow;
+}
 
-	while (remaining > 0) {
-	    int chunk = remaining > INT_MAX ? INT_MAX : (int)remaining;
+static void
+TkBrowserSetClipboardProperty(
+    TkWindow *winPtr,
+    const char *text,
+    int length)
+{
+    TkWindow *clipPtr = TkBrowserClipboardWindow(winPtr);
+    Atom clipboardAtom;
+    Atom utf8Atom;
 
-	    Tcl_DStringAppend(clipboardPtr, buffer, chunk);
-	    buffer += chunk;
-	    remaining -= chunk;
-	}
+    if ((clipPtr == NULL) || (clipPtr->display == NULL)
+	    || (clipPtr->window == None)) {
+	return;
     }
-    return 1;
+    clipboardAtom = (clipPtr->dispPtr->clipboardAtom != None)
+	    ? clipPtr->dispPtr->clipboardAtom
+	    : Tk_InternAtom((Tk_Window)clipPtr, "CLIPBOARD");
+    utf8Atom = (clipPtr->dispPtr->utf8Atom != None)
+	    ? clipPtr->dispPtr->utf8Atom
+	    : Tk_InternAtom((Tk_Window)clipPtr, "UTF8_STRING");
+    if (text == NULL) {
+	text = "";
+	length = 0;
+    } else if (length < 0) {
+	length = (int)strlen(text);
+    }
+    (void)XChangeProperty(clipPtr->display, clipPtr->window, clipboardAtom,
+	    utf8Atom, 8, PropModeReplace, (const unsigned char *)text, length);
+}
+
+static void
+TkBrowserSyncClipboardSelection(
+    TkWindow *winPtr)
+{
+    TkWindow *clipPtr = TkBrowserClipboardWindow(winPtr);
+    TkMainInfo *mainPtr;
+    Tcl_Interp *interp;
+    Tcl_InterpState savedState;
+    Atom clipboardAtom;
+    Atom targetAtom;
+
+    if (clipPtr == NULL) {
+	return;
+    }
+    mainPtr = (clipPtr->mainPtr != NULL) ? clipPtr->mainPtr
+	    : clipPtr->dispPtr->clipboardAppPtr;
+    if ((mainPtr == NULL) || (mainPtr->interp == NULL)) {
+	return;
+    }
+    interp = mainPtr->interp;
+    clipboardAtom = (clipPtr->dispPtr->clipboardAtom != None)
+	    ? clipPtr->dispPtr->clipboardAtom
+	    : Tk_InternAtom((Tk_Window)clipPtr, "CLIPBOARD");
+    targetAtom = (clipPtr->dispPtr->utf8Atom != None)
+	    ? clipPtr->dispPtr->utf8Atom
+	    : XA_STRING;
+    savedState = Tcl_SaveInterpState(interp, TCL_OK);
+    (void)TkSelGetSelection(interp, (Tk_Window)clipPtr, clipboardAtom,
+	    targetAtom, TkBrowserDiscardClipboardSelection, NULL);
+    (void)Tcl_RestoreInterpState(interp, savedState);
 }
 
 void
@@ -412,23 +438,15 @@ TkBrowserSelUpdateClipboard(
     TkWindow *winPtr,
     int option)
 {
-    Tcl_DString clipboard;
-
     if (winPtr == NULL) {
 	return;
     }
     if (option == CLIPBOARD_CLEAR) {
-	(void)X11WasmSetClipboardText("", 0);
+	TkBrowserSetClipboardProperty(winPtr, "", 0);
 	return;
     }
     if (option != CLIPBOARD_APPEND) {
 	return;
     }
-
-    Tcl_DStringInit(&clipboard);
-    if (TkBrowserCopyClipboardText(winPtr, &clipboard)) {
-	(void)X11WasmSetClipboardText(Tcl_DStringValue(&clipboard),
-		Tcl_DStringLength(&clipboard));
-    }
-    Tcl_DStringFree(&clipboard);
+    TkBrowserSyncClipboardSelection(winPtr);
 }
