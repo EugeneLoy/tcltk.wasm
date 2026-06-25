@@ -8,6 +8,13 @@
 
 #include "tkUnixInt.h"
 #include "tkSelect.h"
+#include <X11Wasm/Runtime.h>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#else
+#define EMSCRIPTEN_KEEPALIVE
+#endif
 
 #undef XChangeProperty
 #undef XSetClassHint
@@ -134,6 +141,187 @@ Tk_FreePixmap(
     Pixmap pixmap)
 {
     (void)XFreePixmap(display, pixmap);
+}
+
+static int
+TkBrowserImageDataLength(
+    XImage *imagePtr)
+{
+    if ((imagePtr == NULL) || (imagePtr->bytes_per_line <= 0)
+	    || (imagePtr->height <= 0)) {
+	return 0;
+    }
+    return imagePtr->bytes_per_line * imagePtr->height;
+}
+
+static XImage *
+TkBrowserConvertPaletteImage(
+    unsigned long *colors,
+    int ncolors,
+    Display *display,
+    Drawable drawable,
+    XImage *image,
+    int srcX,
+    int srcY,
+    unsigned int width,
+    unsigned int height)
+{
+    XImage *convertedImage;
+    Window root;
+    int x, y;
+    unsigned int drawableWidth, drawableHeight, borderWidth, depth;
+    int dataLength;
+    unsigned int ix, iy;
+
+    if ((colors == NULL) || (ncolors <= 0) || (display == NULL)
+	    || (image == NULL) || (image->format == XYBitmap)
+	    || (image->bits_per_pixel >= 16)) {
+	return image;
+    }
+    if (XGetGeometry(display, drawable, &root, &x, &y, &drawableWidth,
+	    &drawableHeight, &borderWidth, &depth) == 0) {
+	return image;
+    }
+    convertedImage = XCreateImage(display, DefaultVisual(display,
+	    DefaultScreen(display)), depth, ZPixmap, 0, NULL, width, height,
+	    32, 0);
+    if (convertedImage == NULL) {
+	return NULL;
+    }
+    dataLength = TkBrowserImageDataLength(convertedImage);
+    if (dataLength <= 0) {
+	(void)XDestroyImage(convertedImage);
+	return NULL;
+    }
+    convertedImage->data = (char *)ckalloc((unsigned int)dataLength);
+    memset(convertedImage->data, 0, (unsigned int)dataLength);
+    convertedImage->obdata = (XPointer)convertedImage;
+    for (iy = 0; iy < height; iy++) {
+	for (ix = 0; ix < width; ix++) {
+	    unsigned long pixel = XGetPixel(image, srcX + (int)ix,
+		    srcY + (int)iy);
+
+	    if (pixel < (unsigned long)ncolors) {
+		pixel = colors[pixel];
+	    }
+	    (void)XPutPixel(convertedImage, (int)ix, (int)iy, pixel);
+	}
+    }
+    return convertedImage;
+}
+
+int
+TkPutImage(
+    unsigned long *colors,
+    int ncolors,
+    Display *display,
+    Drawable drawable,
+    GC gc,
+    XImage *image,
+    int srcX,
+    int srcY,
+    int destX,
+    int destY,
+    unsigned int width,
+    unsigned int height)
+{
+    XImage *putImage = TkBrowserConvertPaletteImage(colors, ncolors, display,
+	    drawable, image, srcX, srcY, width, height);
+    int result;
+
+    if (putImage == NULL) {
+	return Success;
+    }
+    result = XPutImage(display, drawable, gc, putImage,
+	    (putImage == image) ? srcX : 0, (putImage == image) ? srcY : 0,
+	    destX, destY, width, height);
+    if (putImage != image) {
+	(void)XDestroyImage(putImage);
+    }
+    return result;
+}
+
+void
+TkSetPixmapColormap(
+    Pixmap pixmap,
+    Colormap colormap)
+{
+    X11WasmSetPixmapColormap(pixmap, colormap);
+}
+
+Pixmap
+TkpCreateNativeBitmap(
+    Display *display,
+    const void *source)
+{
+    return X11WasmCreateNativeBitmap(display, source);
+}
+
+Pixmap
+TkpGetNativeAppBitmap(
+    Display *display,
+    const char *name,
+    int *width,
+    int *height)
+{
+    return X11WasmGetNativeAppBitmap(display, name, width, height);
+}
+
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserTestPutImagePalette(void)
+{
+    Display *display = XOpenDisplay(NULL);
+    Pixmap pixmap = None;
+    GC gc = NULL;
+    XImage *image = NULL;
+    XImage *readback = NULL;
+    unsigned char imageData[4];
+    unsigned long colors[3] = {
+	0xff0000UL, 0x00ff00UL, 0x0000ffUL
+    };
+    int result = 0;
+
+    if (display == NULL) {
+	return 0;
+    }
+    memset(imageData, 0, sizeof(imageData));
+    imageData[0] = 0;
+    imageData[1] = 1;
+    imageData[2] = 2;
+    pixmap = XCreatePixmap(display,
+	    RootWindow(display, DefaultScreen(display)), 3, 1,
+	    (unsigned int)DefaultDepth(display, DefaultScreen(display)));
+    gc = (pixmap != None) ? XCreateGC(display, pixmap, 0, NULL) : NULL;
+    image = XCreateImage(display, DefaultVisual(display, DefaultScreen(display)),
+	    8, ZPixmap, 0, (char *)imageData, 3, 1, 32, 0);
+    if ((pixmap == None) || (gc == NULL) || (image == NULL)
+	    || (TkPutImage(colors, 3, display, pixmap, gc, image, 0, 0, 0, 0,
+		    3, 1) != Success)) {
+	goto cleanup;
+    }
+    readback = XGetImage(display, pixmap, 0, 0, 3, 1, AllPlanes, ZPixmap);
+    if ((readback == NULL)
+	    || (XGetPixel(readback, 0, 0) != colors[0])
+	    || (XGetPixel(readback, 1, 0) != colors[1])
+	    || (XGetPixel(readback, 2, 0) != colors[2])) {
+	goto cleanup;
+    }
+    result = 1;
+
+cleanup:
+    if (readback != NULL) {
+	(void)XDestroyImage(readback);
+    }
+    if (image != NULL) {
+	(void)XDestroyImage(image);
+    }
+    if (gc != NULL) {
+	(void)XFreeGC(display, gc);
+    }
+    if (pixmap != None) {
+	(void)XFreePixmap(display, pixmap);
+    }
+    return result;
 }
 
 int

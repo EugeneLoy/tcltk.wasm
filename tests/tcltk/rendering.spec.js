@@ -389,6 +389,24 @@ test("Tk canvas draws rectangle, line, and text", async ({ page }) => {
   expect(samples.darkTextPixels).toBeGreaterThan(20);
 });
 
+test("TkPutImage maps palette indices before XPutImage", async ({ page }) => {
+  await page.goto("/tcltk.html");
+  await expect(page.locator("#tk-browser-status")).toHaveText("running", {
+    timeout: 15000,
+  });
+  const result = await page.evaluate(() => {
+    const module =
+      /** @type {Window & { Module?: { _TkBrowserTestPutImagePalette?: Function } }} */ (
+        window
+      ).Module;
+    if (!module?._TkBrowserTestPutImagePalette) {
+      throw new Error("missing TkPutImage palette test hook");
+    }
+    return module._TkBrowserTestPutImagePalette();
+  });
+  expect(result).toBe(1);
+});
+
 test("Tk canvas applies GC line width and dash style", async ({ page }) => {
   const script = [
     "pack [canvas .c -width 140 -height 48 -background white]",
