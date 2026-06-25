@@ -215,3 +215,26 @@ test("Tk inactive reset notifies the browser backend", async ({ page }) => {
     },
   ]);
 });
+
+test("Tk inactive reports browser idle time", async ({ page }) => {
+  const script = [
+    "tk inactive reset",
+    "after 50",
+    "set idle [tk inactive]",
+    "list ready $idle",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(result[0]).toBe("ready");
+  const idle = Number.parseInt(result[1] || "", 10);
+  expect(Number.isFinite(idle)).toBe(true);
+  expect(idle).toBeGreaterThanOrEqual(1);
+});

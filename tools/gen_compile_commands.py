@@ -259,7 +259,7 @@ def main():
             [
                 f"UNIX_DIR={tk_overlay}",
                 f"GENERIC_DIR={tk_generic_overlay}",
-                f"X11_INCLUDES=-I{x11_include} -I{tk_xlib}",
+                f"X11_INCLUDES=-I{x11_include} -I{tk_xlib} -DHAVE_XSS=1",
                 "libtk8.6.a",
             ],
         ),
