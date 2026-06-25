@@ -162,6 +162,7 @@ def browser_app_entries(
     tk_build = root / "build/emscripten/tk"
     tcl_overlay = root / "build/emscripten/overlay/tcl/unix"
     tk_overlay = root / "build/emscripten/overlay/tk/unix"
+    tk_generic_overlay = root / "build/emscripten/overlay/tk/generic"
     app_includes = [
         x11_src / "include",
         tcl_build,
@@ -169,7 +170,7 @@ def browser_app_entries(
         tcl_src / "unix",
         tcl_overlay,
         tk_build,
-        tk_src / "generic",
+        tk_generic_overlay,
         tk_src / "unix",
         tk_overlay,
         tk_src / "xlib",
@@ -247,6 +248,7 @@ def main():
     tk_build = root / "build/emscripten/tk"
     tcl_overlay = root / "build/emscripten/overlay/tcl/unix"
     tk_overlay = root / "build/emscripten/overlay/tk/unix"
+    tk_generic_overlay = root / "build/emscripten/overlay/tk/generic"
     x11_include = root / "third-party/x11.wasm/include"
     tk_xlib = root / "third-party/tk/xlib"
 
@@ -256,6 +258,7 @@ def main():
             tk_build,
             [
                 f"UNIX_DIR={tk_overlay}",
+                f"GENERIC_DIR={tk_generic_overlay}",
                 f"X11_INCLUDES=-I{x11_include} -I{tk_xlib}",
                 "libtk8.6.a",
             ],
