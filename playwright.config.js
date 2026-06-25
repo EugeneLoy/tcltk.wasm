@@ -2,7 +2,7 @@
 
 /** @type {import('@playwright/test').PlaywrightTestConfig} */
 module.exports = {
-    testDir: "tests",
+    testDir: "tests/tcltk",
     timeout: 30000,
     webServer: {
 	command: "python3 -m http.server 8765 -d build/browser",

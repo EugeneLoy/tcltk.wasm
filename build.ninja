@@ -8,6 +8,7 @@ tcl_src = third-party/tcl
 tk_src = third-party/tk
 tcl_build = $builddir/tcl
 tk_build = $builddir/tk
+x11_src = third-party/x11.wasm
 browser_build = $builddir/browser
 browser_dist = build/browser
 tcl_overlay_unix = $builddir/overlay/tcl/unix
@@ -15,6 +16,14 @@ tcl_overlay_unix_stamp = $tcl_overlay_unix/.stamp
 tk_overlay_unix = $builddir/overlay/tk/unix
 tk_overlay_unix_stamp = $tk_overlay_unix/.stamp
 configure_tools = tools/emscripten-configure-tools
+
+x11wasm_root = $x11_src
+x11wasm_builddir = $builddir/x11
+x11wasm_emcache = $emcache
+
+include $x11_src/ninja/x11wasm.ninja
+
+x11_lib = $x11wasm_lib
 
 host = wasm32-unknown-emscripten
 common_configure = --host=$host --disable-shared --disable-load --disable-threads --disable-rpath --disable-corefoundation tcl_cv_sys_version=Emscripten ac_cv_func_strtoul=yes tcl_cv_strtoul_unbroken=ok
@@ -44,7 +53,7 @@ rule configure_tk
   description = configure Tk
 
 rule build_tk
-  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tk_build" UNIX_DIR="$$root/$tk_overlay_unix" X11_INCLUDES="-I$$root/$tk_src/xlib" clean && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tk_build" -j"$$jobs" UNIX_DIR="$$root/$tk_overlay_unix" X11_INCLUDES="-I$$root/$tk_src/xlib" libtk8.6.a && touch "$$root/$tk_build/.built"
+  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tk_build" UNIX_DIR="$$root/$tk_overlay_unix" X11_INCLUDES="-I$$root/$x11_src/include -I$$root/$tk_src/xlib" clean && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tk_build" -j"$$jobs" UNIX_DIR="$$root/$tk_overlay_unix" X11_INCLUDES="-I$$root/$x11_src/include -I$$root/$tk_src/xlib" libtk8.6.a && touch "$$root/$tk_build/.built"
   description = build Tk
 
 rule compile_commands
@@ -56,11 +65,11 @@ rule typecheck_js
   description = typecheck browser JS
 
 rule compile_browser_app
-  command = root=$$(pwd) && mkdir -p "$$root/$browser_build" && EM_CACHE="$$root/$emcache" emcc -c -I"$$root/$tcl_build" -I"$$root/$tcl_src/generic" -I"$$root/$tcl_src/unix" -I"$$root/$tcl_overlay_unix" -I"$$root/$tk_build" -I"$$root/$tk_src/generic" -I"$$root/$tk_src/unix" -I"$$root/$tk_overlay_unix" -I"$$root/$tk_src/xlib" -DSTATIC_BUILD=1 "$$root/browser/app/main.c" -o "$$root/$browser_build/main.o"
+  command = root=$$(pwd) && mkdir -p "$$root/$browser_build" && EM_CACHE="$$root/$emcache" emcc -c -I"$$root/$x11_src/include" -I"$$root/$tcl_build" -I"$$root/$tcl_src/generic" -I"$$root/$tcl_overlay_unix" -I"$$root/$tcl_src/unix" -I"$$root/$tk_build" -I"$$root/$tk_src/generic" -I"$$root/$tk_overlay_unix" -I"$$root/$tk_src/unix" -I"$$root/$tk_src/xlib" -DSTATIC_BUILD=1 "$$root/browser/app/main.c" -o "$$root/$browser_build/main.o"
   description = compile browser app
 
 rule link_browser_app
-  command = root=$$(pwd) && mkdir -p "$$root/$browser_dist" "$$root/$emcache" && EM_CACHE="$$root/$emcache" emcc "$$root/$browser_build/main.o" "$$root/$tk_build/libtk8.6.a" "$$root/$tcl_build/libtcl8.6.a" --js-library "$$root/browser/tk/js/tk-browser-library.js" --pre-js "$$root/browser/tk/js/tk-browser-dom.js" --shell-file "$$root/browser/app/shell.html" --preload-file "$$root/$tcl_src/library@/lib/tcl8.6" --preload-file "$$root/$tk_src/library@/lib/tk8.6" -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -o "$$root/$browser_dist/tcltk.html"
+  command = root=$$(pwd) && mkdir -p "$$root/$browser_dist" "$$root/$emcache" && EM_CACHE="$$root/$emcache" emcc "$$root/$browser_build/main.o" "$$root/$x11_lib" "$$root/$tk_build/libtk8.6.a" "$$root/$tcl_build/libtcl8.6.a" --js-library "$$root/$x11wasm_js_library" --pre-js "$$root/$x11wasm_js_pre" --shell-file "$$root/browser/app/shell.html" --preload-file "$$root/$tcl_src/library@/lib/tcl8.6" --preload-file "$$root/$tk_src/library@/lib/tk8.6" -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -o "$$root/$browser_dist/tcltk.html"
   description = link browser app
 
 build $tcl_overlay_unix_stamp: overlay_tcl_unix build.ninja browser/tcl/unix/tclUnixTime.c
@@ -69,16 +78,17 @@ build $tcl_build/.built: build_tcl $tcl_build/Makefile $tcl_overlay_unix_stamp
 
 build $tk_overlay_unix_stamp: overlay_tk_unix build.ninja browser/tk/unix/.gitkeep browser/tk/unix/tkUnixPort.h browser/tk/unix/tkBrowserXlibDecls.h browser/tk/unix/tkBrowserInt.h browser/tk/unix/tkUnixEvent.c browser/tk/unix/tkUnixXId.c third-party/tk/unix/tkUnixEvent.c
 build $tk_build/Makefile: configure_tk $tcl_build/.built build.ninja $configure_tools/uname
-build $tk_build/.built: build_tk $tk_build/Makefile $tk_overlay_unix_stamp
-build build/compile_commands.json: compile_commands tools/gen_compile_commands.py build.ninja $tcl_build/Makefile $tk_build/Makefile $tcl_overlay_unix_stamp $tk_overlay_unix_stamp
-build build/typecheck-js.stamp: typecheck_js tsconfig.json browser/tk/js/tk-browser-dom.js browser/tk/js/tk-browser-library.js browser/tk/js/emscripten-library.d.ts
+build $tk_build/.built: build_tk $tk_build/Makefile $tk_overlay_unix_stamp $x11_src/include/X11/Xlib.h $x11_src/include/X11/XlibWasm.h $x11_src/include/X11/Xutil.h
+build build/compile_commands.json: compile_commands tools/gen_compile_commands.py build.ninja $x11_src/ninja/x11wasm.ninja $tcl_build/Makefile $tk_build/Makefile $tcl_overlay_unix_stamp $tk_overlay_unix_stamp
+build build/typecheck-js.stamp: typecheck_js tsconfig.json $x11wasm_js_pre $x11wasm_js_library $x11wasm_js_types
 build $browser_build/main.o: compile_browser_app browser/app/main.c build.ninja $tk_overlay_unix_stamp
-build $browser_dist/tcltk.html: link_browser_app $browser_build/main.o $tk_build/.built $tcl_build/.built build/typecheck-js.stamp browser/app/shell.html browser/tk/js/tk-browser-dom.js browser/tk/js/tk-browser-library.js
+build $browser_dist/tcltk.html: link_browser_app $browser_build/main.o $x11_lib $tk_build/.built $tcl_build/.built build/typecheck-js.stamp browser/app/shell.html $x11wasm_js_pre $x11wasm_js_library
 
 build configure-tcl: phony $tcl_build/Makefile
 build tcl: phony $tcl_build/.built
 build configure-tk: phony $tk_build/Makefile
 build tk: phony $tk_build/.built
+build x11: phony $x11_lib $x11wasm_js_library $x11wasm_js_pre
 build compile_commands: phony build/compile_commands.json
 build typecheck_js: phony build/typecheck-js.stamp
 build browser: phony $browser_dist/tcltk.html

@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import shlex
 import subprocess
@@ -35,12 +36,31 @@ def is_compile_command(tokens: list[str]) -> bool:
     return any(Path(token).name == "emcc" for token in tokens)
 
 
-def emscripten_tooling_flags(root: Path) -> list[str]:
-    sysroot = root / "build/emscripten/em-cache/sysroot"
-    flags = ["--target=wasm32-unknown-emscripten"]
+def ensure_emscripten_sysroot(root: Path, compiler: str) -> Path:
+    emcache = root / "build/emscripten/em-cache"
+    sysroot = emcache / "sysroot"
     if sysroot.exists():
-        flags.append(f"--sysroot={sysroot}")
-    return flags
+        return sysroot
+
+    emcache.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "EM_CACHE": str(emcache)}
+    subprocess.run(
+        [compiler, "-x", "c", "-fsyntax-only", os.devnull],
+        cwd=root,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return sysroot
+
+
+def emscripten_tooling_flags(root: Path, compiler: str) -> list[str]:
+    sysroot = ensure_emscripten_sysroot(root, compiler)
+    return [
+        "--target=wasm32-unknown-emscripten",
+        f"--sysroot={sysroot}",
+    ]
 
 
 def with_tooling_flags(tokens: list[str], tooling_flags: list[str]) -> list[str]:
@@ -135,6 +155,7 @@ def browser_app_entries(
     compiler: str,
     tooling_flags: list[str],
 ) -> list[dict[str, object]]:
+    x11_src = root / "third-party/x11.wasm"
     tcl_src = root / "third-party/tcl"
     tk_src = root / "third-party/tk"
     tcl_build = root / "build/emscripten/tcl"
@@ -142,6 +163,7 @@ def browser_app_entries(
     tcl_overlay = root / "build/emscripten/overlay/tcl/unix"
     tk_overlay = root / "build/emscripten/overlay/tk/unix"
     app_includes = [
+        x11_src / "include",
         tcl_build,
         tcl_src / "generic",
         tcl_src / "unix",
@@ -165,6 +187,47 @@ def browser_app_entries(
     ]
 
 
+def x11wasm_sources(root: Path) -> list[tuple[Path, Path]]:
+    x11_src = root / "third-party/x11.wasm"
+    x11_ninja = x11_src / "ninja/x11wasm.ninja"
+    if not x11_ninja.exists():
+        return []
+
+    pattern = re.compile(
+        r"^build\s+\$x11wasm_builddir/(?P<object>[^:\s]+):\s+"
+        r"x11wasm_compile_c\s+\$x11wasm_root/(?P<source>[^\s|]+)"
+    )
+    sources: list[tuple[Path, Path]] = []
+    for line in x11_ninja.read_text().splitlines():
+        match = pattern.match(line)
+        if match is None:
+            continue
+        source = x11_src / match.group("source")
+        output = root / "build/emscripten/x11" / match.group("object")
+        sources.append((source, output))
+    return sources
+
+
+def x11wasm_entries(
+    root: Path,
+    compiler: str,
+    tooling_flags: list[str],
+) -> list[dict[str, object]]:
+    x11_src = root / "third-party/x11.wasm"
+    return [
+        compile_entry(
+            root,
+            compiler,
+            source,
+            output,
+            [x11_src / "include"],
+            tooling_flags,
+            ["-DSTATIC_BUILD=1"],
+        )
+        for source, output in x11wasm_sources(root)
+    ]
+
+
 def write_compile_commands(output: Path, entries: list[dict[str, object]]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_suffix(output.suffix + ".tmp")
@@ -178,12 +241,13 @@ def main():
     root = Path.cwd().resolve()
     output = (root / args.output).resolve()
     compiler = shutil.which("emcc") or "emcc"
-    tooling_flags = emscripten_tooling_flags(root)
+    tooling_flags = emscripten_tooling_flags(root, compiler)
 
     tcl_build = root / "build/emscripten/tcl"
     tk_build = root / "build/emscripten/tk"
     tcl_overlay = root / "build/emscripten/overlay/tcl/unix"
     tk_overlay = root / "build/emscripten/overlay/tk/unix"
+    x11_include = root / "third-party/x11.wasm/include"
     tk_xlib = root / "third-party/tk/xlib"
 
     builds = [
@@ -192,7 +256,7 @@ def main():
             tk_build,
             [
                 f"UNIX_DIR={tk_overlay}",
-                f"X11_INCLUDES=-I{tk_xlib}",
+                f"X11_INCLUDES=-I{x11_include} -I{tk_xlib}",
                 "libtk8.6.a",
             ],
         ),
@@ -207,6 +271,12 @@ def main():
             key = (str(entry["directory"]), str(entry["file"]), str(entry["command"]))
             if key in seen:
                 continue
+            seen.add(key)
+            entries.append(entry)
+
+    for entry in x11wasm_entries(root, compiler, tooling_flags):
+        key = (str(entry["directory"]), str(entry["file"]), str(entry["command"]))
+        if key not in seen:
             seen.add(key)
             entries.append(entry)
 

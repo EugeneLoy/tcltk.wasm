@@ -10,7 +10,7 @@
     "skipLibCheck": true
   },
   "include": [
-    "browser/tk/js/**/*.js",
-    "browser/tk/js/**/*.d.ts"
+    "third-party/x11.wasm/js/**/*.js",
+    "third-party/x11.wasm/js/**/*.d.ts"
   ]
 }

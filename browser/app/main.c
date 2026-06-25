@@ -12,21 +12,21 @@
 #include <tcl.h>
 #include <tk.h>
 
-extern int TkBrowserServiceEvents(void);
+extern int TkBrowserServiceXEvents(void);
 
 static const char *demoScript =
     "namespace eval ::browser {}\n"
     "set ::browserInput {}\n"
     "set ::browserPreedit {}\n"
-    "bind all <<TkBrowserCompositionStart>> {\n"
+    "bind all <<X11WasmCompositionStart>> {\n"
     "    set ::browserPreedit %d\n"
     "    browser::setStatus \"preedit:$::browserPreedit\"\n"
     "}\n"
-    "bind all <<TkBrowserCompositionUpdate>> {\n"
+    "bind all <<X11WasmCompositionUpdate>> {\n"
     "    set ::browserPreedit %d\n"
     "    browser::setStatus \"preedit:$::browserPreedit\"\n"
     "}\n"
-    "bind all <<TkBrowserCompositionEnd>> {\n"
+    "bind all <<X11WasmCompositionEnd>> {\n"
     "    set ::browserPreedit {}\n"
     "}\n"
     "bind all <Key> {\n"
@@ -122,6 +122,35 @@ BrowserEvalAndReport(
 
     BrowserSetResult(code, Tcl_GetStringResult(interp));
     return code;
+}
+
+static int
+BrowserDrainTclEvents(void)
+{
+    int events = 0;
+
+    while (Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)) {
+	events++;
+	if (events > 100) {
+	    break;
+	}
+    }
+    return events;
+}
+
+static int
+BrowserDrainQueuedControlEvents(void)
+{
+    int events = 0;
+
+    while (Tcl_ServiceEvent(TCL_FILE_EVENTS | TCL_TIMER_EVENTS
+	    | TCL_IDLE_EVENTS)) {
+	events++;
+	if (events > 100) {
+	    break;
+	}
+    }
+    return events;
 }
 
 static int
@@ -224,15 +253,10 @@ BrowserEventLoop(
     void *clientData)
 {
     Tcl_Interp *interp = (Tcl_Interp *)clientData;
-    int events = 0;
 
-    TkBrowserServiceEvents();
-    while (Tcl_DoOneEvent(TCL_ALL_EVENTS | TCL_DONT_WAIT)) {
-	events++;
-	if (events > 100) {
-	    break;
-	}
-    }
+    BrowserDrainQueuedControlEvents();
+    TkBrowserServiceXEvents();
+    BrowserDrainTclEvents();
     (void)interp;
 }
 

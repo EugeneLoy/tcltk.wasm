@@ -70,6 +70,25 @@
 
 #include "tkBrowserXlibDecls.h"
 
+struct TkWindow;
+extern void TkBrowserSelUpdateClipboard(struct TkWindow *winPtr, int option);
+extern void TkBrowserSyncMetadataTargets(Display *display);
+extern int TkBrowserXChangeProperty(Display *display, Window window,
+		Atom property, Atom type, int format, int mode,
+		_Xconst unsigned char *data, int nelements);
+extern int TkBrowserXSetClassHint(Display *display, Window window,
+		XClassHint *classHints);
+extern int TkBrowserXStoreName(Display *display, Window window,
+		_Xconst char *name);
+extern void X11WasmSetPixmapColormap(Pixmap pixmap, Colormap colormap);
+extern Pixmap X11WasmCreateNativeBitmap(Display *display, const void *source);
+extern Pixmap X11WasmGetNativeAppBitmap(Display *display, const char *name,
+	int *width, int *height);
+
+#define XChangeProperty TkBrowserXChangeProperty
+#define XSetClassHint TkBrowserXSetClassHint
+#define XStoreName TkBrowserXStoreName
+
 /*
  * Keep TK_USE_INPUT_METHODS consistent with tk.h. Browser text input will
  * eventually use DOM composition/input events, but TkWindow and Tk_FakeWin
@@ -108,10 +127,6 @@
 #   define NBBY 8
 #endif
 
-#define TkPutImage(colors, ncolors, display, pixels, gc, image, srcx, srcy, destx, desty, width, height) \
-	XPutImage(display, pixels, gc, image, srcx, srcy, destx, desty, \
-	width, height);
-
 #ifndef SEEK_SET
 #   define SEEK_SET 0
 #endif
@@ -126,12 +141,18 @@
 
 #define TkpButtonSetDefaults() {}
 #define TkpDestroyButton(butPtr) {}
-#define TkSelUpdateClipboard(a,b) {}
-#define TkSetPixmapColormap(p,c) {}
+#define TkSelUpdateClipboard(a,b) TkBrowserSelUpdateClipboard((a), (b))
+#define TkSetPixmapColormap(p,c) X11WasmSetPixmapColormap((p), (c))
+#define TkPutImage(colors,ncolors,display,drawable,gc,image,srcX,srcY,destX,destY,width,height) \
+	X11WasmPutImagePalette((colors), (ncolors), (display), (drawable), \
+		(gc), (image), (srcX), (srcY), (destX), (destY), (width), \
+		(height))
 
 #define TkpDefineNativeBitmaps()
-#define TkpCreateNativeBitmap(display, source) None
-#define TkpGetNativeAppBitmap(display, name, w, h) None
+#define TkpCreateNativeBitmap(display, source) \
+	X11WasmCreateNativeBitmap((display), (source))
+#define TkpGetNativeAppBitmap(display, name, w, h) \
+	X11WasmGetNativeAppBitmap((display), (name), (w), (h))
 
 #define TkpPrintWindowId(buf,w) \
 	snprintf((buf), TCL_INTEGER_SPACE, "0x%08lx", (unsigned long) (w))
