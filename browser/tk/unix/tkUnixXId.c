@@ -13,8 +13,6 @@
 #undef XSetClassHint
 #undef XStoreName
 
-extern int X11WasmJsSetClipboardText(const char *utf8, int utf8Length);
-
 static int
 TkBrowserIsRootToplevel(
     TkWindow *winPtr)
@@ -232,7 +230,7 @@ TkBrowserSelUpdateClipboard(
 	return;
     }
     if (option == CLIPBOARD_CLEAR) {
-	(void)X11WasmJsSetClipboardText("", 0);
+	(void)X11WasmSetClipboardText("", 0);
 	return;
     }
     if (option != CLIPBOARD_APPEND) {
@@ -241,7 +239,7 @@ TkBrowserSelUpdateClipboard(
 
     Tcl_DStringInit(&clipboard);
     if (TkBrowserCopyClipboardText(winPtr, &clipboard)) {
-	(void)X11WasmJsSetClipboardText(Tcl_DStringValue(&clipboard),
+	(void)X11WasmSetClipboardText(Tcl_DStringValue(&clipboard),
 		Tcl_DStringLength(&clipboard));
     }
     Tcl_DStringFree(&clipboard);
