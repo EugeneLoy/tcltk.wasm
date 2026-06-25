@@ -211,40 +211,101 @@ BrowserSetArgVariables(
 static int
 BrowserRunArgumentScripts(
     Tcl_Interp *interp,
-    int argc,
-    char **argv,
     int *ranScriptPtr)
 {
+    Tcl_Obj *argvObj;
+    Tcl_Obj *scriptList = NULL;
+    Tcl_Obj *cleanArgvObj = NULL;
+    Tcl_Obj *argcObj;
+    Tcl_Obj **objv;
+    Tcl_Obj **scriptObjv;
+    int objc = 0;
+    int scriptObjc = 0;
     int i;
+    int cleanArgc = 0;
     int code = TCL_OK;
 
     *ranScriptPtr = 0;
-    for (i = 1; i < argc; i++) {
-	const char *arg = argv[i];
-	const char *script = NULL;
+    /*
+     * Tk_Init consumes Tk startup options from argv, so inspect the Tcl
+     * variable after initialization instead of reusing the original C argv.
+     */
+    argvObj = Tcl_GetVar2Ex(interp, "argv", NULL, TCL_GLOBAL_ONLY);
+    if (argvObj == NULL) {
+	return TCL_OK;
+    }
+
+    Tcl_IncrRefCount(argvObj);
+    scriptList = Tcl_NewListObj(0, NULL);
+    cleanArgvObj = Tcl_NewListObj(0, NULL);
+    Tcl_IncrRefCount(scriptList);
+    Tcl_IncrRefCount(cleanArgvObj);
+
+    if (Tcl_ListObjGetElements(interp, argvObj, &objc, &objv) != TCL_OK) {
+	code = TCL_ERROR;
+	goto done;
+    }
+
+    for (i = 0; i < objc; i++) {
+	const char *arg = Tcl_GetString(objv[i]);
 
 	if (strcmp(arg, "--demo") == 0) {
-	    script = demoScript;
+	    Tcl_ListObjAppendElement(interp, scriptList,
+		    Tcl_NewStringObj(demoScript, -1));
 	} else if ((strcmp(arg, "--eval") == 0) || (strcmp(arg, "-c") == 0)) {
-	    if ((i + 1) >= argc) {
+	    if ((i + 1) >= objc) {
 		Tcl_SetObjResult(interp, Tcl_NewStringObj(
 			"missing script after --eval", -1));
 		BrowserSetResult(TCL_ERROR, Tcl_GetStringResult(interp));
-		return TCL_ERROR;
+		code = TCL_ERROR;
+		goto done;
 	    }
-	    script = argv[++i];
-	} else if ((strcmp(arg, "--") == 0) && ((i + 1) < argc)) {
-	    script = argv[++i];
+	    Tcl_ListObjAppendElement(interp, scriptList, objv[++i]);
+	} else if (strcmp(arg, "--") == 0) {
+	    while (++i < objc) {
+		Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
+		cleanArgc++;
+	    }
 	} else {
-	    script = arg;
-	}
-
-	*ranScriptPtr = 1;
-	code = BrowserEvalAndReport(interp, script, "argument script failed");
-	if (code != TCL_OK) {
-	    return code;
+	    Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
+	    cleanArgc++;
 	}
     }
+
+    if (Tcl_SetVar2Ex(interp, "argv", NULL, cleanArgvObj,
+	    TCL_GLOBAL_ONLY) == NULL) {
+	code = TCL_ERROR;
+	goto done;
+    }
+    argcObj = Tcl_NewWideIntObj(cleanArgc);
+    if (Tcl_SetVar2Ex(interp, "argc", NULL, argcObj,
+	    TCL_GLOBAL_ONLY) == NULL) {
+	code = TCL_ERROR;
+	goto done;
+    }
+
+    if (Tcl_ListObjGetElements(interp, scriptList, &scriptObjc,
+	    &scriptObjv) != TCL_OK) {
+	code = TCL_ERROR;
+	goto done;
+    }
+    for (i = 0; i < scriptObjc; i++) {
+	*ranScriptPtr = 1;
+	code = BrowserEvalAndReport(interp, Tcl_GetString(scriptObjv[i]),
+		"argument script failed");
+	if (code != TCL_OK) {
+	    goto done;
+	}
+    }
+
+done:
+    if (cleanArgvObj != NULL) {
+	Tcl_DecrRefCount(cleanArgvObj);
+    }
+    if (scriptList != NULL) {
+	Tcl_DecrRefCount(scriptList);
+    }
+    Tcl_DecrRefCount(argvObj);
     return code;
 }
 
@@ -304,7 +365,7 @@ main(
     Tcl_StaticPackage(interp, "Tk", Tk_Init, Tk_SafeInit);
     BrowserConsole("log", "Tk initialized");
 
-    code = BrowserRunArgumentScripts(interp, argc, argv, &ranArgumentScript);
+    code = BrowserRunArgumentScripts(interp, &ranArgumentScript);
     if (code != TCL_OK) {
 	BrowserSetStatus("eval error");
 	emscripten_set_main_loop_arg(BrowserEventLoop, interp, 0, 1);

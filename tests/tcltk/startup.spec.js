@@ -14,6 +14,42 @@ test("Tcl/Tk browser harness reaches running state", async ({ page }) => {
   ).toBeGreaterThan(0);
 });
 
+test("Tk startup options are separated from browser eval scripts", async ({
+  page,
+}) => {
+  const script = [
+    "update idletasks",
+    "if {[info exists geometry]} {set parsedGeometry $geometry} else {set parsedGeometry {}}",
+    "join [list ready $argc [llength $argv] [lindex $argv 0] [lindex $argv 1] $parsedGeometry [wm geometry .]] |",
+  ].join("\n");
+  const query = new URLSearchParams();
+  query.append("argv", "-geometry");
+  query.append("argv", "120x80+11+13");
+  query.append("argv", "app-one");
+  query.append("arg", "app two");
+  query.set("eval", script);
+
+  await page.goto(`/tcltk.html?${query.toString()}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "2",
+    "2",
+    "app-one",
+    "app two",
+    "120x80+11+13",
+    "120x80+11+13",
+  ]);
+});
+
 test("Tk busy creates an InputOnly browser window without canvas", async ({
   page,
 }) => {
