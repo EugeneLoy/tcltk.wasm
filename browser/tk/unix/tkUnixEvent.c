@@ -55,8 +55,6 @@ static int browserTestFileHandlerDeleteFd = -1;
 extern void TkChangeEventWindow(XEvent *eventPtr, TkWindow *winPtr);
 extern int TkPositionInTree(TkWindow *winPtr, TkWindow *treePtr);
 
-#define X11_WASM_BROWSER_WHEEL_EVENT (MappingNotify + 1)
-
 static void DisplayCheckProc(ClientData clientData, int flags);
 static void DisplayExitHandler(ClientData clientData);
 static void DisplayFileProc(ClientData clientData, int flags);
