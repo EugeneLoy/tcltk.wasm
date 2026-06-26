@@ -12,6 +12,10 @@
 #define EMSCRIPTEN_KEEPALIVE
 #endif
 
+#ifndef X11_WASM_PINNED_KEY_EVENT_STATE
+#define X11_WASM_PINNED_KEY_EVENT_STATE ((unsigned int)0x40000000U)
+#endif
+
 typedef struct TkBrowserFileHandler {
     int fd;
     int mask;
@@ -223,10 +227,8 @@ TkBrowserCompositionClientMessageProc(
     Tk_Window tkwin,
     XEvent *eventPtr)
 {
-    TkDisplay *dispPtr;
     TkWindow *targetPtr;
     const char *eventName;
-    Tcl_Obj *detailObj;
     char *text;
     int textLength = 0;
 
@@ -240,17 +242,15 @@ TkBrowserCompositionClientMessageProc(
 	return 0;
     }
 
-    dispPtr = TkBrowserDisplayForEvent(eventPtr);
     targetPtr = (TkWindow *)tkwin;
-    if ((dispPtr != NULL) && (dispPtr->focusPtr != NULL)
-	    && (dispPtr->focusPtr->window != None)
-	    && !(dispPtr->focusPtr->flags & TK_ALREADY_DEAD)) {
-	targetPtr = dispPtr->focusPtr;
-    }
     text = X11WasmTakeCompositionText(eventPtr, &textLength);
-    detailObj = Tcl_NewStringObj((text != NULL) ? text : "",
-	    (text != NULL) ? textLength : 0);
-    TkSendVirtualEvent((Tk_Window)targetPtr, eventName, detailObj);
+    if ((targetPtr != NULL) && (targetPtr->window != None)
+	    && !(targetPtr->flags & TK_ALREADY_DEAD)) {
+	Tcl_Obj *detailObj = Tcl_NewStringObj((text != NULL) ? text : "",
+		(text != NULL) ? textLength : 0);
+
+	TkSendVirtualEvent((Tk_Window)targetPtr, eventName, detailObj);
+    }
     if (text != NULL) {
 	XFree(text);
     }
@@ -366,7 +366,13 @@ TkBrowserRetargetKeyEvent(
 	    && (eventPtr->type != KeyRelease))) {
 	return;
     }
-    if (grabWinPtr != NULL) {
+    if (eventPtr->xkey.state & X11_WASM_PINNED_KEY_EVENT_STATE) {
+	targetPtr = TkBrowserWindowForEvent(dispPtr, eventPtr);
+	if ((targetPtr != NULL) && (targetPtr->window != None)
+		&& !(targetPtr->flags & TK_ALREADY_DEAD)) {
+	    TkSetFocusWin(targetPtr, 0);
+	}
+    } else if (grabWinPtr != NULL) {
 	targetPtr = grabWinPtr;
 	TkSetFocusWin(targetPtr, 0);
     } else if (dispPtr->focusPtr != NULL) {
@@ -431,21 +437,28 @@ TkBrowserTransferXEventsToTcl(
 	    continue;
 	}
 	if ((event.type == KeyPress) || (event.type == KeyRelease)) {
+	    int pinnedKeyEvent = (event.x.xkey.state
+		    & X11_WASM_PINNED_KEY_EVENT_STATE) != 0;
+	    TkWindow *lookupWinPtr = (pinnedKeyEvent && (dispPtr != NULL))
+		    ? TkBrowserWindowForEvent(dispPtr, &event.x)
+		    : ((dispPtr != NULL) ? dispPtr->focusPtr : NULL);
+
 	    event.k.charValuePtr = NULL;
 	    event.k.charValueLen = 0;
 	    event.k.keysym = NoSymbol;
 #ifdef TK_USE_INPUT_METHODS
 	    if ((event.type == KeyPress) && (dispPtr != NULL)
 		    && (dispPtr->flags & TK_DISPLAY_USE_IM)
-		    && (dispPtr->focusPtr != NULL)
-		    && (dispPtr->focusPtr->inputContext != NULL)) {
+		    && (lookupWinPtr != NULL)
+		    && (lookupWinPtr->inputContext != NULL)) {
 		Tcl_DString ds;
 
 		Tcl_DStringInit(&ds);
-		(void)TkpGetString(dispPtr->focusPtr, &event.x, &ds);
+		(void)TkpGetString(lookupWinPtr, &event.x, &ds);
 		Tcl_DStringFree(&ds);
 	    }
 #endif
+	    event.x.xkey.state &= ~X11_WASM_PINNED_KEY_EVENT_STATE;
 	}
 	Tk_QueueWindowEvent(&event.x, TCL_QUEUE_TAIL);
 	count++;

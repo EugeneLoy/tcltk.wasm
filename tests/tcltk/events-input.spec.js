@@ -676,6 +676,106 @@ test("DOM composition events surface as Tk virtual events", async ({
   await expect(status).toContainText(/key .* か/);
 });
 
+test("DOM composition target survives Tk focus changes", async ({ page }) => {
+  const script = [
+    "tk useinputmethods 1",
+    "set ::events {}",
+    "proc ::record {event} {",
+    "    lappend ::events $event",
+    "    browser::setStatus [join $::events {|}]",
+    "}",
+    "entry .first",
+    "entry .second",
+    "pack .first",
+    "pack .second",
+    "update idletasks",
+    "bind .first <<X11WasmCompositionStart>> {::record [list first start %d]; focus -force .second; update}",
+    "bind .first <<X11WasmCompositionUpdate>> {::record [list first update %d]}",
+    "bind .first <<X11WasmCompositionEnd>> {::record [list first end %d]}",
+    "bind .first <KeyPress> {::record [list first key %K %A]}",
+    "bind .second <<X11WasmCompositionStart>> {::record [list second start %d]}",
+    "bind .second <<X11WasmCompositionUpdate>> {::record [list second update %d]}",
+    "bind .second <<X11WasmCompositionEnd>> {::record [list second end %d]}",
+    "bind .second <KeyPress> {::record [list second key %K %A]}",
+    "focus -force .first",
+    "update",
+    "list ready [winfo id .first] [winfo id .second] [focus] [tk useinputmethods]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[3], `expected focus on first: ${ready.join(" ")}`).toBe(
+    ".first",
+  );
+  expect(ready[4], `input methods were not enabled: ${ready.join(" ")}`).toBe(
+    "1",
+  );
+  const firstId = Number.parseInt(ready[1], 0);
+  const secondId = Number.parseInt(ready[2], 0);
+  expect(firstId, `unexpected first window id: ${ready[1]}`).toBeGreaterThan(0);
+  expect(secondId, `unexpected second window id: ${ready[2]}`).toBeGreaterThan(
+    0,
+  );
+
+  const status = page.locator("#tk-browser-status");
+  await page.evaluate((windowId) => {
+    const input = document.querySelector(".x11-wasm-input");
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: { focusInput?: Function } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    backend?.focusInput?.(true, windowId);
+    input.focus();
+    input.dispatchEvent(new FocusEvent("focus"));
+  }, firstId);
+
+  const dispatchComposition = async (type, data) => {
+    await page.evaluate(
+      ({ type, data }) => {
+        const input = document.querySelector(".x11-wasm-input");
+        if (!(input instanceof HTMLTextAreaElement)) {
+          throw new Error("missing browser input textarea");
+        }
+        const event =
+          typeof CompositionEvent === "function"
+            ? new CompositionEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                data,
+              })
+            : new Event(type, { bubbles: true, cancelable: true });
+        if (!("data" in event)) {
+          Object.defineProperty(event, "data", { value: data });
+        }
+        input.dispatchEvent(event);
+      },
+      { type, data },
+    );
+  };
+
+  await dispatchComposition("compositionstart", "k");
+  await expect(status).toContainText("first start k");
+  await dispatchComposition("compositionupdate", "か");
+  await expect(status).toContainText("first update か");
+  await dispatchComposition("compositionend", "か");
+  await expect(status).toContainText("first end か");
+  await expect(status).toContainText(/first key .* か/);
+  await expect(status).not.toContainText("second start");
+  await expect(status).not.toContainText("second update");
+  await expect(status).not.toContainText("second end");
+  await expect(status).not.toContainText("second key");
+});
+
 test("Tk focus -force claims browser input without pointer click", async ({
   page,
 }) => {
