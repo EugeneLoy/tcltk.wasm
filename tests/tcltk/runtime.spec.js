@@ -239,6 +239,95 @@ test("Tk inactive reports browser idle time", async ({ page }) => {
   expect(idle).toBeGreaterThanOrEqual(1);
 });
 
+test("browser eval result preserves embedded NUL bytes", async ({ page }) => {
+  const query = new URLSearchParams({
+    eval: "binary format c* {65 0 66}",
+  }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  const result = await page.evaluate(() => {
+    const element = document.getElementById("tk-browser-result");
+    const module =
+      /** @type {Window & { Module?: { tkBrowserEvalCode?: number, tkBrowserEvalDone?: boolean, tkBrowserEvalResult?: string } }} */ (
+        window
+      ).Module;
+    const text = element?.textContent ?? "";
+    const moduleResult =
+      typeof module?.tkBrowserEvalResult === "string"
+        ? module.tkBrowserEvalResult
+        : "";
+    return {
+      code: module?.tkBrowserEvalCode,
+      datasetCode: element?.dataset.code,
+      done: module?.tkBrowserEvalDone,
+      moduleCodes: Array.from(moduleResult, (char) => char.charCodeAt(0)),
+      textCodes: Array.from(text, (char) => char.charCodeAt(0)),
+    };
+  });
+
+  expect(result).toEqual({
+    code: 0,
+    datasetCode: "0",
+    done: true,
+    moduleCodes: [65, 0, 66],
+    textCodes: [65, 0, 66],
+  });
+});
+
+test("browser result and status commands preserve embedded NUL bytes", async ({
+  page,
+}) => {
+  const script = [
+    "set ::browserNulValue [binary format c* {83 0 84}]",
+    "after 0 {browser::setStatus $::browserNulValue; browser::setResult $::browserNulValue}",
+    "list queued",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const status = document.getElementById("tk-browser-status");
+        return Array.from(status?.textContent ?? "", (char) =>
+          char.charCodeAt(0),
+        );
+      }),
+    )
+    .toEqual([83, 0, 84]);
+
+  const result = await page.evaluate(() => {
+    const element = document.getElementById("tk-browser-result");
+    const module =
+      /** @type {Window & { Module?: { tkBrowserEvalCode?: number, tkBrowserEvalResult?: string } }} */ (
+        window
+      ).Module;
+    const text = element?.textContent ?? "";
+    const moduleResult =
+      typeof module?.tkBrowserEvalResult === "string"
+        ? module.tkBrowserEvalResult
+        : "";
+    return {
+      code: module?.tkBrowserEvalCode,
+      datasetCode: element?.dataset.code,
+      moduleCodes: Array.from(moduleResult, (char) => char.charCodeAt(0)),
+      textCodes: Array.from(text, (char) => char.charCodeAt(0)),
+    };
+  });
+
+  expect(result).toEqual({
+    code: 0,
+    datasetCode: "0",
+    moduleCodes: [83, 0, 84],
+    textCodes: [83, 0, 84],
+  });
+});
+
 test("Tcl clock clicks keeps browser wide microsecond values", async ({
   page,
 }) => {

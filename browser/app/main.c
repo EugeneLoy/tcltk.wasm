@@ -67,25 +67,45 @@ BrowserConsole(
 }
 
 static void
-BrowserSetStatus(
-    const char *status)
+BrowserSetStatusBytes(
+    const char *status,
+    int length)
 {
     EM_ASM({
 	const element = document.getElementById("tk-browser-status");
+	const text = ($1 >= 0) ? UTF8ToString($0, $1, true) : UTF8ToString($0);
 	if (element) {
-	    element.textContent = UTF8ToString($0);
+	    element.textContent = text;
 	}
-    }, status);
+    }, status, length);
 }
 
 static void
-BrowserSetResult(
+BrowserSetStatus(
+    const char *status)
+{
+    BrowserSetStatusBytes(status, -1);
+}
+
+static void
+BrowserSetStatusObj(
+    Tcl_Obj *statusObj)
+{
+    int length;
+    const char *status = Tcl_GetStringFromObj(statusObj, &length);
+
+    BrowserSetStatusBytes(status, length);
+}
+
+static void
+BrowserSetResultBytes(
     int code,
-    const char *result)
+    const char *result,
+    int length)
 {
     EM_ASM({
 	const code = $0;
-	const result = UTF8ToString($1);
+	const result = ($2 >= 0) ? UTF8ToString($1, $2, true) : UTF8ToString($1);
 	const module = globalThis.Module || {};
 	globalThis.Module = module;
 	module.tkBrowserEvalCode = code;
@@ -97,7 +117,18 @@ BrowserSetResult(
 	    element.textContent = result;
 	    element.dataset.code = String(code);
 	}
-    }, code, result);
+    }, code, result, length);
+}
+
+static void
+BrowserSetResultObj(
+    int code,
+    Tcl_Obj *resultObj)
+{
+    int length;
+    const char *result = Tcl_GetStringFromObj(resultObj, &length);
+
+    BrowserSetResultBytes(code, result, length);
 }
 
 static int
@@ -123,7 +154,7 @@ BrowserEvalAndReport(
 {
     int code = BrowserEval(interp, script, label);
 
-    BrowserSetResult(code, Tcl_GetStringResult(interp));
+    BrowserSetResultObj(code, Tcl_GetObjResult(interp));
     return code;
 }
 
@@ -214,7 +245,7 @@ BrowserStatusCmd(
 	Tcl_WrongNumArgs(interp, 1, objv, "status");
 	return TCL_ERROR;
     }
-    BrowserSetStatus(Tcl_GetString(objv[1]));
+    BrowserSetStatusObj(objv[1]);
     return TCL_OK;
 }
 
@@ -230,7 +261,7 @@ BrowserResultCmd(
 	Tcl_WrongNumArgs(interp, 1, objv, "result");
 	return TCL_ERROR;
     }
-    BrowserSetResult(TCL_OK, Tcl_GetString(objv[1]));
+    BrowserSetResultObj(TCL_OK, objv[1]);
     return TCL_OK;
 }
 
@@ -363,7 +394,7 @@ BrowserRunArgumentScripts(
 	    if ((i + 1) >= objc) {
 		Tcl_SetObjResult(interp, Tcl_NewStringObj(
 			"missing script after --eval", -1));
-		BrowserSetResult(TCL_ERROR, Tcl_GetStringResult(interp));
+		BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
 		code = TCL_ERROR;
 		goto done;
 	    }
@@ -486,7 +517,7 @@ main(
     }
     if (!ranArgumentScript) {
 	if (BrowserEval(interp, demoScript, "demo script failed") != TCL_OK) {
-	    BrowserSetResult(TCL_ERROR, Tcl_GetStringResult(interp));
+	    BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
 	    BrowserSetStatus("failed: demo script");
 	    return 1;
 	}
