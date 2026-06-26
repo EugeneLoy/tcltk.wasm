@@ -37,11 +37,13 @@ static int BrowserServiceFileHandler(int fd, int mask);
 #define DisplayExitHandler TkBrowserUpstreamDisplayExitHandler
 #define DisplayFileProc TkBrowserUpstreamDisplayFileProc
 #define DisplaySetupProc TkBrowserUpstreamDisplaySetupProc
+#define TkpSync TkBrowserUpstreamTkpSync
 #define TransferXEventsToTcl TkBrowserUpstreamTransferXEventsToTcl
 #define TkUnixDoOneXEvent TkBrowserUpstreamUnixDoOneXEvent
 #include "tkUnixEventUpstream.c"
 #undef TkUnixDoOneXEvent
 #undef TransferXEventsToTcl
+#undef TkpSync
 #undef DisplaySetupProc
 #undef DisplayFileProc
 #undef DisplayExitHandler
@@ -55,6 +57,9 @@ static int browserTestFileHandlerCount;
 static int browserTestFileHandlerMask;
 static ClientData browserTestFileHandlerData;
 static int browserTestFileHandlerDeleteFd = -1;
+static int browserTestGenericEventCount;
+static int browserTestGenericLastEventType;
+static int browserTestSawMouseWheelEvent;
 static int browserCompositionClientMessageHandlerRegistered;
 
 extern void TkChangeEventWindow(XEvent *eventPtr, TkWindow *winPtr);
@@ -68,7 +73,7 @@ static void DisplayCheckProc(ClientData clientData, int flags);
 static void DisplayExitHandler(ClientData clientData);
 static void DisplayFileProc(ClientData clientData, int flags);
 static void DisplaySetupProc(ClientData clientData, int flags);
-static int TkBrowserTransferXEventsToTcl(Display *display);
+static int TkBrowserTransferXEventsToTcl(Display *display, int retargetFocus);
 
 void
 TkCreateXEventSource(void)
@@ -139,7 +144,7 @@ DisplayCheckProc(
     for (dispPtr = TkGetDisplayList(); dispPtr != NULL;
 	    dispPtr = dispPtr->nextPtr) {
 	XFlush(dispPtr->display);
-	(void)TkBrowserTransferXEventsToTcl(dispPtr->display);
+	(void)TkBrowserTransferXEventsToTcl(dispPtr->display, 1);
     }
 }
 
@@ -159,7 +164,7 @@ DisplayFileProc(
 	XNoOp(display);
 	XFlush(display);
     }
-    (void)TkBrowserTransferXEventsToTcl(display);
+    (void)TkBrowserTransferXEventsToTcl(display, 1);
 }
 
 static TkDisplay *
@@ -411,7 +416,8 @@ TkBrowserRetargetWheelEvent(
 
 static int
 TkBrowserTransferXEventsToTcl(
-    Display *display)
+    Display *display,
+    int retargetFocus)
 {
     union {
 	int type;
@@ -430,7 +436,9 @@ TkBrowserTransferXEventsToTcl(
 	    continue;
 	}
 	dispPtr = TkBrowserDisplayForEvent(&event.x);
-	TkBrowserRetargetFocusEvent(&event.x, dispPtr);
+	if (retargetFocus) {
+	    TkBrowserRetargetFocusEvent(&event.x, dispPtr);
+	}
 	TkBrowserRetargetKeyEvent(&event.x, dispPtr);
 	TkBrowserRetargetWheelEvent(&event.x, dispPtr);
 	if (XFilterEvent(&event.x, event.x.xany.window)) {
@@ -481,10 +489,18 @@ TkBrowserServiceXEvents(void)
 	}
 	XFlush(display);
 	if (XEventsQueued(display, QueuedAfterFlush) > 0) {
-	    count += TkBrowserTransferXEventsToTcl(display);
+	    count += TkBrowserTransferXEventsToTcl(display, 1);
 	}
     }
     return count;
+}
+
+void
+TkpSync(
+    Display *display)
+{
+    XSync(display, False);
+    (void)TkBrowserTransferXEventsToTcl(display, 0);
 }
 
 static void
@@ -501,6 +517,20 @@ BrowserTestFileProc(
     if (deleteFd >= 0) {
 	BrowserDeleteFileHandler(deleteFd);
     }
+}
+
+static int
+BrowserTestGenericEventProc(
+    ClientData clientData,
+    XEvent *eventPtr)
+{
+    (void)clientData;
+    browserTestGenericEventCount++;
+    browserTestGenericLastEventType = eventPtr->type;
+    if (eventPtr->type == MouseWheelEvent) {
+	browserTestSawMouseWheelEvent = 1;
+    }
+    return 0;
 }
 
 static TkBrowserFileHandler *
@@ -605,6 +635,7 @@ TkBrowserTestUnixEventFileHandlers(void)
     XEvent event;
     XEvent readback;
     Tcl_Time now;
+    int doOneResult;
 
     memset(&savedDisplayHandler, 0, sizeof(savedDisplayHandler));
     BrowserDeleteFileHandler(fakeFd);
@@ -682,8 +713,9 @@ TkBrowserTestUnixEventFileHandlers(void)
     browserTestFileHandlerMask = 0;
     browserTestFileHandlerData = NULL;
     Tcl_GetTime(&now);
-    (void)TkUnixDoOneXEvent(&now);
-    if ((browserTestFileHandlerCount != 1)
+    doOneResult = TkUnixDoOneXEvent(&now);
+    if ((doOneResult != 1)
+	    || (browserTestFileHandlerCount != 1)
 	    || (browserTestFileHandlerMask != TCL_READABLE)
 	    || (browserTestFileHandlerData != INT2PTR(2001))) {
 	goto cleanup;
@@ -710,12 +742,69 @@ cleanup:
     return result;
 }
 
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserTestTkpSyncTransfersBrowserEvents(void)
+{
+    int drained = 0;
+    int result = 0;
+    TkDisplay *dispPtr;
+    Display *display;
+    XEvent event;
+
+    dispPtr = TkGetDisplayList();
+    if ((dispPtr == NULL) || (dispPtr->display == NULL)) {
+	return 0;
+    }
+    display = dispPtr->display;
+    while (Tcl_ServiceEvent(TCL_WINDOW_EVENTS)) {
+	if (++drained > 100) {
+	    return 0;
+	}
+    }
+
+    browserTestGenericEventCount = 0;
+    browserTestGenericLastEventType = 0;
+    browserTestSawMouseWheelEvent = 0;
+    Tk_CreateGenericHandler(BrowserTestGenericEventProc, NULL);
+
+    memset(&event, 0, sizeof(event));
+    event.xbutton.type = X11_WASM_BROWSER_WHEEL_EVENT;
+    event.xbutton.display = display;
+    event.xbutton.window = RootWindow(display, DefaultScreen(display));
+    event.xbutton.root = event.xbutton.window;
+    event.xbutton.x = 3;
+    event.xbutton.y = 4;
+    event.xbutton.x_root = 3;
+    event.xbutton.y_root = 4;
+    event.xbutton.button = Button4;
+    if (XPutBackEvent(display, &event) != Success) {
+	goto cleanup;
+    }
+
+    TkpSync(display);
+    drained = 0;
+    while (!browserTestSawMouseWheelEvent
+	    && Tcl_ServiceEvent(TCL_WINDOW_EVENTS)) {
+	if (++drained > 100) {
+	    break;
+	}
+    }
+    result = (browserTestSawMouseWheelEvent
+	    && (browserTestGenericLastEventType == MouseWheelEvent)
+	    && (browserTestGenericEventCount > 0));
+
+cleanup:
+    Tk_DeleteGenericHandler(BrowserTestGenericEventProc, NULL);
+    return result;
+}
+
 int
 TkUnixDoOneXEvent(
     Tcl_Time *timePtr)
 {
     TkDisplay *dispPtr;
     Tcl_Time now;
+    int serviced = 0;
 
     if (Tcl_ServiceEvent(TCL_WINDOW_EVENTS)) {
 	return 1;
@@ -729,10 +818,14 @@ TkUnixDoOneXEvent(
 		    TCL_READABLE)) {
 		DisplayFileProc(dispPtr, TCL_READABLE);
 	    }
+	    serviced = 1;
 	}
     }
 
     if (Tcl_ServiceEvent(TCL_WINDOW_EVENTS)) {
+	return 1;
+    }
+    if (serviced) {
 	return 1;
     }
 
