@@ -150,6 +150,77 @@ test("Tk CLIPBOARD selection ownership updates browser clipboard bridge", async 
   expect(clipboard.writes).toEqual([value]);
 });
 
+test("Tk CLIPBOARD selection owner failure clears browser clipboard bridge", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const clipboard = {
+      writes: [],
+      writeText(text) {
+        this.writes.push(String(text));
+        return Promise.resolve();
+      },
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+  });
+
+  const value = "fresh clipboard owner text";
+  const script = [
+    "package require Tk",
+    `set ::selectionPayload {${value}}`,
+    "proc __tkBrowserGoodClipboardHandler {type offset maxChars} {",
+    "  return $::selectionPayload",
+    "}",
+    "proc __tkBrowserFailingClipboardHandler {type offset maxChars} {",
+    "  error {clipboard owner failed}",
+    "}",
+    "frame .goodClipOwner",
+    "frame .badClipOwner",
+    "pack .goodClipOwner .badClipOwner",
+    "selection handle -selection CLIPBOARD .goodClipOwner {__tkBrowserGoodClipboardHandler STRING} STRING",
+    "selection own -selection CLIPBOARD .goodClipOwner",
+    "update",
+    "set first [selection get -selection CLIPBOARD]",
+    "selection handle -selection CLIPBOARD .badClipOwner {__tkBrowserFailingClipboardHandler STRING} STRING",
+    "selection own -selection CLIPBOARD .badClipOwner",
+    "update",
+    "set failStatus [catch {selection get -selection CLIPBOARD} failMessage]",
+    "list ready $first $failStatus",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  await expect(page.locator("#tk-browser-result")).toHaveText(
+    `ready {${value}} 1`,
+  );
+
+  const clipboard = await page.evaluate(async () => {
+    await Promise.resolve();
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: { clipboardText?: string, clipboardWriteStatus?: string } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    const nativeClipboard =
+      /** @type {Navigator & { clipboard?: { writes?: string[] } }} */ (
+        navigator
+      ).clipboard;
+    return {
+      stored: backend?.clipboardText,
+      status: backend?.clipboardWriteStatus,
+      writes: nativeClipboard?.writes || [],
+    };
+  });
+  expect(clipboard.stored).toBe("");
+  expect(clipboard.status).toBe("written");
+  expect(clipboard.writes).toEqual([value, ""]);
+});
+
 test("Tk CLIPBOARD selection clear updates browser clipboard bridge", async ({
   page,
 }) => {

@@ -609,6 +609,7 @@ TkBrowserSyncClipboardSelection(
     Tcl_InterpState savedState;
     Atom clipboardAtom;
     Atom targetAtom;
+    int code;
 
     if (clipPtr == NULL) {
 	return;
@@ -627,9 +628,12 @@ TkBrowserSyncClipboardSelection(
 	    ? clipPtr->dispPtr->utf8Atom
 	    : XA_STRING;
     savedState = Tcl_SaveInterpState(interp, TCL_OK);
-    (void)TkSelGetSelection(interp, (Tk_Window)clipPtr, clipboardAtom,
+    code = TkSelGetSelection(interp, (Tk_Window)clipPtr, clipboardAtom,
 	    targetAtom, TkBrowserDiscardClipboardSelection, NULL);
     (void)Tcl_RestoreInterpState(interp, savedState);
+    if (code != TCL_OK) {
+	TkBrowserSetClipboardProperty(clipPtr, "", 0);
+    }
 }
 
 int
