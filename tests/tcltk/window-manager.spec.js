@@ -946,6 +946,57 @@ test("Tk wm protocol updates browser window metadata", async ({ page }) => {
   );
 });
 
+test("Tk wm protocol clear updates browser window metadata", async ({ page }) => {
+  const protocolName = "MY_BROWSER_PROTOCOL";
+  const script = [
+    "toplevel .protocolClear",
+    "wm protocol .protocolClear WM_DELETE_WINDOW {set ::deleteProtocol 1}",
+    `wm protocol .protocolClear ${protocolName} {set ::customProtocol 1}`,
+    "update",
+    "set before [join [lsort [wm protocol .protocolClear]] ,]",
+    `wm protocol .protocolClear ${protocolName} {}`,
+    "update",
+    "set after [join [lsort [wm protocol .protocolClear]] ,]",
+    "join [list ready $before $after [winfo id .protocolClear]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    expect.any(String),
+    "WM_DELETE_WINDOW",
+    expect.any(String),
+  ]);
+  expect(result[1].split(",").sort()).toEqual(
+    [protocolName, "WM_DELETE_WINDOW"].sort(),
+  );
+  const windowId = Number.parseInt(result[3], 0);
+  expect(windowId).toBeGreaterThan(0);
+  const protocolState = await page
+    .locator(`[data-x11-wasm-xid="${windowId}"]`)
+    .evaluate((element, id) => {
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot } }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      return {
+        attribute: element.getAttribute("data-x11-wasm-protocols"),
+        protocols: backend?.resources.get(id)?.protocols || [],
+      };
+    }, windowId);
+  expect(protocolState.attribute).toBe("WM_DELETE_WINDOW");
+  expect(protocolState.protocols).toEqual(["WM_DELETE_WINDOW"]);
+});
+
 test("browser backend dispatches WM_PROTOCOLS to Tk protocol handlers", async ({
   page,
 }) => {
