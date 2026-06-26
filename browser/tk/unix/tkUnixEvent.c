@@ -51,10 +51,15 @@ static int browserTestFileHandlerCount;
 static int browserTestFileHandlerMask;
 static ClientData browserTestFileHandlerData;
 static int browserTestFileHandlerDeleteFd = -1;
+static int browserCompositionClientMessageHandlerRegistered;
 
 extern void TkChangeEventWindow(XEvent *eventPtr, TkWindow *winPtr);
 extern int TkPositionInTree(TkWindow *winPtr, TkWindow *treePtr);
 
+static int TkBrowserCompositionClientMessageProc(Tk_Window tkwin,
+	XEvent *eventPtr);
+static const char *TkBrowserCompositionEventName(Tk_Window tkwin,
+	Atom messageType);
 static void DisplayCheckProc(ClientData clientData, int flags);
 static void DisplayExitHandler(ClientData clientData);
 static void DisplayFileProc(ClientData clientData, int flags);
@@ -70,6 +75,11 @@ TkCreateXEventSource(void)
     if (!tsdPtr->initialized) {
 	tsdPtr->initialized = 1;
 	Tcl_CreateEventSource(DisplaySetupProc, DisplayCheckProc, NULL);
+	if (!browserCompositionClientMessageHandlerRegistered) {
+	    Tk_CreateClientMessageHandler(
+		    TkBrowserCompositionClientMessageProc);
+	    browserCompositionClientMessageHandlerRegistered = 1;
+	}
 	TkCreateExitHandler(DisplayExitHandler, NULL);
     }
 }
@@ -82,6 +92,10 @@ DisplayExitHandler(
 	    Tcl_GetThreadData(&dataKey, sizeof(ThreadSpecificData));
 
     (void)clientData;
+    if (browserCompositionClientMessageHandlerRegistered) {
+	Tk_DeleteClientMessageHandler(TkBrowserCompositionClientMessageProc);
+	browserCompositionClientMessageHandlerRegistered = 0;
+    }
     Tcl_DeleteEventSource(DisplaySetupProc, DisplayCheckProc, NULL);
     tsdPtr->initialized = 0;
 }
@@ -185,6 +199,62 @@ TkBrowserEventTargetWindow(
     }
     focusToplevelPtr = TkWmFocusToplevel(winPtr);
     return (focusToplevelPtr != NULL) ? focusToplevelPtr : winPtr;
+}
+
+static const char *
+TkBrowserCompositionEventName(
+    Tk_Window tkwin,
+    Atom messageType)
+{
+    if (messageType == Tk_InternAtom(tkwin, "X11WasmCompositionStart")) {
+	return "X11WasmCompositionStart";
+    }
+    if (messageType == Tk_InternAtom(tkwin, "X11WasmCompositionUpdate")) {
+	return "X11WasmCompositionUpdate";
+    }
+    if (messageType == Tk_InternAtom(tkwin, "X11WasmCompositionEnd")) {
+	return "X11WasmCompositionEnd";
+    }
+    return NULL;
+}
+
+static int
+TkBrowserCompositionClientMessageProc(
+    Tk_Window tkwin,
+    XEvent *eventPtr)
+{
+    TkDisplay *dispPtr;
+    TkWindow *targetPtr;
+    const char *eventName;
+    Tcl_Obj *detailObj;
+    char *text;
+    int textLength = 0;
+
+    if ((tkwin == NULL) || (eventPtr == NULL)
+	    || (eventPtr->type != ClientMessage)) {
+	return 0;
+    }
+    eventName = TkBrowserCompositionEventName(tkwin,
+	    eventPtr->xclient.message_type);
+    if (eventName == NULL) {
+	return 0;
+    }
+
+    dispPtr = TkBrowserDisplayForEvent(eventPtr);
+    targetPtr = (TkWindow *)tkwin;
+    if ((dispPtr != NULL) && (dispPtr->focusPtr != NULL)
+	    && (dispPtr->focusPtr->window != None)
+	    && !(dispPtr->focusPtr->flags & TK_ALREADY_DEAD)) {
+	targetPtr = dispPtr->focusPtr;
+    }
+    text = X11WasmTakeCompositionText(eventPtr, &textLength);
+    detailObj = Tcl_NewStringObj((text != NULL) ? text : "",
+	    (text != NULL) ? textLength : 0);
+    TkSendVirtualEvent((Tk_Window)targetPtr, eventName, detailObj);
+    if (text != NULL) {
+	XFree(text);
+    }
+    return 1;
 }
 
 static TkWindow *

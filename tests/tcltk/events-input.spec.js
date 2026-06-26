@@ -586,6 +586,96 @@ test("input method context preserves DOM key text", async ({ page }) => {
   await expect(status).toContainText(/key .* あ/);
 });
 
+test("DOM composition events surface as Tk virtual events", async ({
+  page,
+}) => {
+  const script = [
+    "tk useinputmethods 1",
+    "set ::events {}",
+    "proc ::record {event} {",
+    "    lappend ::events $event",
+    "    browser::setStatus [join $::events {|}]",
+    "}",
+    "entry .target",
+    "pack .target",
+    "update idletasks",
+    "bind .target <<X11WasmCompositionStart>> {::record [list start %d]}",
+    "bind .target <<X11WasmCompositionUpdate>> {::record [list update %d]}",
+    "bind .target <<X11WasmCompositionEnd>> {::record [list end %d]}",
+    "bind .target <KeyPress> {::record [list key %K %A]}",
+    "focus -force .target",
+    "update",
+    "list ready [winfo id .target] [focus] [tk useinputmethods]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[2], `expected focus on target: ${ready.join(" ")}`).toBe(
+    ".target",
+  );
+  expect(ready[3], `input methods were not enabled: ${ready.join(" ")}`).toBe(
+    "1",
+  );
+  const targetId = Number.parseInt(ready[1], 0);
+  expect(targetId, `unexpected target window id: ${ready[1]}`).toBeGreaterThan(
+    0,
+  );
+
+  const status = page.locator("#tk-browser-status");
+  await page.evaluate((windowId) => {
+    const input = document.querySelector(".x11-wasm-input");
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: { focusInput?: Function } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    backend?.focusInput?.(true, windowId);
+    input.focus();
+    input.dispatchEvent(new FocusEvent("focus"));
+  }, targetId);
+
+  const dispatchComposition = async (type, data) => {
+    await page.evaluate(
+      ({ type, data }) => {
+        const input = document.querySelector(".x11-wasm-input");
+        if (!(input instanceof HTMLTextAreaElement)) {
+          throw new Error("missing browser input textarea");
+        }
+        const event =
+          typeof CompositionEvent === "function"
+            ? new CompositionEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                data,
+              })
+            : new Event(type, { bubbles: true, cancelable: true });
+        if (!("data" in event)) {
+          Object.defineProperty(event, "data", { value: data });
+        }
+        input.dispatchEvent(event);
+      },
+      { type, data },
+    );
+  };
+
+  await dispatchComposition("compositionstart", "k");
+  await expect(status).toContainText("start k");
+  await dispatchComposition("compositionupdate", "か");
+  await expect(status).toContainText("update か");
+  await dispatchComposition("compositionend", "か");
+  await expect(status).toContainText("end か");
+  await expect(status).toContainText(/key .* か/);
+});
+
 test("Tk focus -force claims browser input without pointer click", async ({
   page,
 }) => {
