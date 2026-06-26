@@ -47,3 +47,55 @@ test("Tk popup menu dispatches command from browser pointer input", async ({
   await expect(page.locator("#tk-browser-status")).toHaveText("alpha");
   await expect(menu).toBeHidden();
 });
+
+test("Tk menubutton invokes menu entry from press-drag-release", async ({
+  page,
+}) => {
+  const script = [
+    "proc ::recordMenu {value} {browser::setStatus $value}",
+    "menubutton .mb -text Choices -menu .mb.menu -relief raised",
+    "menu .mb.menu -tearoff 0",
+    ".mb.menu add command -label Alpha -command {::recordMenu alpha}",
+    ".mb.menu add command -label Beta -command {::recordMenu beta}",
+    "pack .mb -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .mb] [winfo id .mb.menu] [winfo width .mb] [winfo height .mb]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const buttonId = Number.parseInt(ready[1], 0);
+  const menuId = Number.parseInt(ready[2], 0);
+  expect(buttonId, `unexpected menubutton id: ${ready[1]}`).toBeGreaterThan(0);
+  expect(menuId, `unexpected menu id: ${ready[2]}`).toBeGreaterThan(0);
+
+  const button = page.locator(`[data-x11-wasm-xid="${buttonId}"]`);
+  const menu = page.locator(`[data-x11-wasm-xid="${menuId}"]`);
+  await expect(button).toBeVisible();
+  const buttonBox = await button.boundingBox();
+  expect(buttonBox, "missing menubutton bounding box").not.toBeNull();
+
+  await page.mouse.move(
+    buttonBox.x + buttonBox.width / 2,
+    buttonBox.y + buttonBox.height / 2,
+  );
+  await page.mouse.down();
+  await expect(menu).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox, "missing menubutton menu bounding box").not.toBeNull();
+  await page.mouse.move(
+    menuBox.x + Math.min(menuBox.width - 2, Math.max(4, menuBox.width / 2)),
+    menuBox.y + Math.min(menuBox.height - 2, Math.max(4, menuBox.height / 4)),
+  );
+  await page.mouse.up();
+
+  await expect(page.locator("#tk-browser-status")).toHaveText("alpha");
+  await expect(menu).toBeHidden();
+});
