@@ -125,6 +125,7 @@ test("DOM input is delivered through Tk window events", async ({ page }) => {
   expect(eventMask & (1 << 4)).toBeTruthy();
   expect(eventMask & (1 << 5)).toBeTruthy();
   expect(eventMask & (1 << 21)).toBeTruthy();
+  expect(eventMask & (1 << 28)).toBeTruthy();
   await target.hover({ position: { x: 4, y: 5 } });
   await expect(status).toHaveText(/enter \d+ \d+ \d+ \d+ 0/);
 

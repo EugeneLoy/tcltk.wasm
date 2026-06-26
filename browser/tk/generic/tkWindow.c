@@ -67,7 +67,7 @@ static const XWindowChanges defChanges = {
     KeyPressMask|KeyReleaseMask|ButtonPressMask|ButtonReleaseMask| \
     EnterWindowMask|LeaveWindowMask|PointerMotionMask|ExposureMask| \
     VisibilityChangeMask|StructureNotifyMask|SubstructureNotifyMask| \
-    PropertyChangeMask|ColormapChangeMask
+    PropertyChangeMask|ColormapChangeMask|MouseWheelMask
 static const XSetWindowAttributes defAtts= {
     None,			/* background_pixmap */
     0,				/* background_pixel */
