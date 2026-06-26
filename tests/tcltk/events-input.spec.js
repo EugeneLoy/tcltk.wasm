@@ -100,7 +100,7 @@ test("DOM input is delivered through Tk window events", async ({ page }) => {
   const query = new URLSearchParams({ eval: script }).toString();
 
   await page.goto(`/tcltk.html?${query}`);
-  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+  await expect(page.locator("#tk-browser-result")).toHaveText(/ready\s+\d+/, {
     timeout: 15000,
   });
   const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
