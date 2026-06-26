@@ -14,6 +14,8 @@
 
 extern int TkBrowserServiceXEvents(void);
 
+static Tcl_Interp *browserInterp;
+
 static const char *demoScript =
     "namespace eval ::browser {}\n"
     "set ::browserInput {}\n"
@@ -122,6 +124,52 @@ BrowserEvalAndReport(
 
     BrowserSetResult(code, Tcl_GetStringResult(interp));
     return code;
+}
+
+static void
+BrowserTestGetWideTime(
+    Tcl_Time *timePtr,
+    ClientData clientData)
+{
+    (void)clientData;
+    timePtr->sec = 5000;
+    timePtr->usec = 123456;
+}
+
+static void
+BrowserTestScaleWideTime(
+    Tcl_Time *timePtr,
+    ClientData clientData)
+{
+    (void)timePtr;
+    (void)clientData;
+}
+
+EMSCRIPTEN_KEEPALIVE int
+TclBrowserTestClockClicksUsesWideTime(void)
+{
+    Tcl_GetTimeProc *savedGetProc = NULL;
+    Tcl_ScaleTimeProc *savedScaleProc = NULL;
+    ClientData savedClientData = NULL;
+    Tcl_WideInt clicks = 0;
+    int code;
+
+    if (browserInterp == NULL) {
+	return 0;
+    }
+
+    Tcl_QueryTimeProc(&savedGetProc, &savedScaleProc, &savedClientData);
+    Tcl_SetTimeProc(BrowserTestGetWideTime, BrowserTestScaleWideTime, NULL);
+    code = Tcl_EvalEx(browserInterp, "clock clicks", -1, TCL_EVAL_GLOBAL);
+    if (code == TCL_OK) {
+	code = Tcl_GetWideIntFromObj(browserInterp,
+		Tcl_GetObjResult(browserInterp), &clicks);
+    }
+    Tcl_SetTimeProc(savedGetProc, savedScaleProc, savedClientData);
+    if (code != TCL_OK) {
+	return 0;
+    }
+    return clicks == (Tcl_WideInt)5000123456LL;
 }
 
 static int
@@ -337,6 +385,7 @@ main(
 	BrowserSetStatus("failed: Tcl_CreateInterp");
 	return 1;
     }
+    browserInterp = interp;
     Tcl_SetVar(interp, "tcl_library", "/lib/tcl8.6", TCL_GLOBAL_ONLY);
     Tcl_SetVar2(interp, "env", "TCL_LIBRARY", "/lib/tcl8.6", TCL_GLOBAL_ONLY);
     Tcl_SetVar2(interp, "env", "TK_LIBRARY", "/lib/tk8.6", TCL_GLOBAL_ONLY);

@@ -253,7 +253,14 @@ def main():
     tk_xlib = root / "third-party/tk/xlib"
 
     builds = [
-        (tcl_build, [f"UNIX_DIR={tcl_overlay}", "libtcl8.6.a"]),
+        (
+            tcl_build,
+            [
+                f"UNIX_DIR={tcl_overlay}",
+                "EXTRA_CFLAGS=-DTCL_WIDE_CLICKS=1",
+                "libtcl8.6.a",
+            ],
+        ),
         (
             tk_build,
             [

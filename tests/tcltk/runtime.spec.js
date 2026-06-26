@@ -238,3 +238,25 @@ test("Tk inactive reports browser idle time", async ({ page }) => {
   expect(Number.isFinite(idle)).toBe(true);
   expect(idle).toBeGreaterThanOrEqual(1);
 });
+
+test("Tcl clock clicks keeps browser wide microsecond values", async ({
+  page,
+}) => {
+  await page.goto("/tcltk.html");
+  await expect(page.locator("#tk-browser-status")).toHaveText("running", {
+    timeout: 15000,
+  });
+
+  const result = await page.evaluate(() => {
+    const module =
+      /** @type {Window & { Module?: { _TclBrowserTestClockClicksUsesWideTime?: Function } }} */ (
+        window
+      ).Module;
+    if (!module?._TclBrowserTestClockClicksUsesWideTime) {
+      throw new Error("missing Tcl clock clicks test hook");
+    }
+    return module._TclBrowserTestClockClicksUsesWideTime();
+  });
+
+  expect(result).toBe(1);
+});

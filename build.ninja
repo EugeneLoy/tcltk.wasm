@@ -30,6 +30,7 @@ x11_lib = $x11wasm_lib
 host = wasm32-unknown-emscripten
 common_configure = --host=$host --disable-shared --disable-load --disable-threads --disable-rpath --disable-corefoundation tcl_cv_sys_version=Emscripten ac_cv_func_strtoul=yes tcl_cv_strtoul_unbroken=ok
 tcl_configure = $common_configure --disable-dll-unloading --with-tzdata=no
+tcl_browser_extra_cflags = -DTCL_WIDE_CLICKS=1
 tk_configure = $common_configure --without-x --disable-xft --disable-xss
 
 rule overlay_tcl_unix
@@ -52,7 +53,7 @@ rule configure_tcl
   description = configure Tcl
 
 rule build_tcl
-  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tcl_build" UNIX_DIR="$$root/$tcl_overlay_unix" clean && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tcl_build" -j"$$jobs" UNIX_DIR="$$root/$tcl_overlay_unix" libtcl8.6.a && touch "$$root/$tcl_build/.built"
+  command = root=$$(pwd) && jobs=$$(nproc) && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tcl_build" UNIX_DIR="$$root/$tcl_overlay_unix" EXTRA_CFLAGS="$tcl_browser_extra_cflags" clean && EM_CACHE="$$root/$emcache" emmake make -C "$$root/$tcl_build" -j"$$jobs" UNIX_DIR="$$root/$tcl_overlay_unix" EXTRA_CFLAGS="$tcl_browser_extra_cflags" libtcl8.6.a && touch "$$root/$tcl_build/.built"
   description = build Tcl
 
 rule configure_tk

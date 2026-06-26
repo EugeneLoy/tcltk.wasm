@@ -1,5 +1,10 @@
 #ifdef __EMSCRIPTEN__
 #define TCL_BROWSER_WIDE_CLICKS 1
+/*
+ * The generic Tcl objects are built with TCL_WIDE_CLICKS, but upstream Unix
+ * wide-click support is Darwin-only. Include that backend without its wide
+ * branch and provide the Emscripten implementation below.
+ */
 #undef TCL_WIDE_CLICKS
 #endif
 
