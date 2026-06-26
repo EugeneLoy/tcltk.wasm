@@ -1216,6 +1216,62 @@ test("Tk wm normal size hints update browser window metadata", async ({
 	expect(hints.styleMaxHeight).toBe("220px");
 });
 
+test("Tk wm grid updates browser base size and resize increment hints", async ({
+  page,
+}) => {
+  const script = [
+    "toplevel .grid",
+    "label .grid.l -text grid",
+    "pack .grid.l",
+    "update",
+    "wm grid .grid 10 4 8 6",
+    "update",
+    "join [list ready [join [wm grid .grid] ,] [winfo reqwidth .grid] [winfo reqheight .grid] [winfo id .grid]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "10,4,8,6",
+    expect.any(String),
+    expect.any(String),
+    expect.any(String),
+  ]);
+  const reqWidth = Number.parseInt(result[2], 0);
+  const reqHeight = Number.parseInt(result[3], 0);
+  const windowId = Number.parseInt(result[4], 0);
+  expect(reqWidth).toBeGreaterThan(0);
+  expect(reqHeight).toBeGreaterThan(0);
+  expect(windowId).toBeGreaterThan(0);
+  const hints = await page
+    .locator(`[data-x11-wasm-xid="${windowId}"]`)
+    .evaluate((element) => ({
+      flags: Number.parseInt(
+        element.getAttribute("data-x11-wasm-size-hints-flags") || "0",
+        10,
+      ),
+      widthInc: element.getAttribute("data-x11-wasm-width-inc"),
+      heightInc: element.getAttribute("data-x11-wasm-height-inc"),
+      baseWidth: element.getAttribute("data-x11-wasm-base-width"),
+      baseHeight: element.getAttribute("data-x11-wasm-base-height"),
+    }));
+  expect(hints.flags & (1 << 6)).toBeTruthy();
+  expect(hints.flags & (1 << 8)).toBeTruthy();
+  expect(hints.widthInc).toBe("8");
+  expect(hints.heightInc).toBe("6");
+  expect(hints.baseWidth).toBe(String(Math.max(0, reqWidth - 10 * 8)));
+  expect(hints.baseHeight).toBe(String(Math.max(0, reqHeight - 4 * 6)));
+});
+
 test("Tk wm aspect applies exact aspect ratio to browser CSS", async ({
   page,
 }) => {

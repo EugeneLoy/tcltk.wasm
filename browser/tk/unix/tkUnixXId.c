@@ -68,6 +68,7 @@ TkBrowserFindNativeBitmap(
 #undef XChangeProperty
 #undef XSetClassHint
 #undef XSetWMHints
+#undef XSetWMNormalHints
 #undef XStoreName
 
 static int
@@ -175,6 +176,16 @@ TkBrowserXSetWMHints(
 {
     TkBrowserSyncMetadataTargets(display);
     return XSetWMHints(display, window, wmHints);
+}
+
+void
+TkBrowserXSetWMNormalHints(
+    Display *display,
+    Window window,
+    XSizeHints *sizeHints)
+{
+    TkBrowserSyncMetadataTargets(display);
+    XSetWMNormalHints(display, window, sizeHints);
 }
 
 int
