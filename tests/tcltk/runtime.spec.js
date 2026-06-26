@@ -127,15 +127,15 @@ test("Tk bell notifies the browser backend", async ({ page }) => {
   });
 
   expect(bell.count).toBeGreaterThanOrEqual(1);
-  expect(bell.percent).toBe(0);
+  expect(bell.percent).toBe(50);
   expect(bell.audioStatus).toBe("played");
   expect(bell.vibrationStatus).toBe("vibrated");
-  expect(bell.duration).toBeGreaterThan(0);
-  expect(bell.frequency).toBe(880);
-  expect(bell.volume).toBeGreaterThan(0);
+  expect(bell.duration).toBe(100);
+  expect(bell.frequency).toBe(400);
+  expect(bell.volume).toBeCloseTo(0.5);
   expect(bell.calls).toContainEqual({ kind: "context" });
   expect(bell.calls).toContainEqual({
-    frequency: 880,
+    frequency: 400,
     kind: "start",
     time: 2,
     type: "sine",
@@ -149,8 +149,8 @@ test("Tk bell notifies the browser backend", async ({ page }) => {
       audioStatus: "played",
       count: bell.count,
       duration: bell.duration,
-      frequency: 880,
-      percent: 0,
+      frequency: 400,
+      percent: 50,
       vibrationStatus: "vibrated",
     }),
   );
