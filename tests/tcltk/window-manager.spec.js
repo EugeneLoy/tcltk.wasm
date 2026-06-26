@@ -1049,6 +1049,56 @@ test("Tk wm command clear removes browser window metadata", async ({
   );
 });
 
+test("Tk wm type attributes update browser window type metadata", async ({
+  page,
+}) => {
+  const script = [
+    "toplevel .typeattrs",
+    "wm attributes .typeattrs -type {dialog utility normal}",
+    "update",
+    "join [list ready [join [wm attributes .typeattrs -type] ,] [winfo id .typeattrs]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "dialog,utility,normal",
+    expect.any(String),
+  ]);
+  const windowId = Number.parseInt(result[2], 0);
+  expect(windowId).toBeGreaterThan(0);
+  const types = await page
+    .locator(`[data-x11-wasm-xid="${windowId}"]`)
+    .evaluate((element, id) => {
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot } }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      return {
+        attribute: element.getAttribute("data-x11-wasm-window-types"),
+        resourceTypes: backend?.resources.get(id)?.windowTypes || [],
+      };
+    }, windowId);
+  const expectedTypes = [
+    "_NET_WM_WINDOW_TYPE_DIALOG",
+    "_NET_WM_WINDOW_TYPE_UTILITY",
+    "_NET_WM_WINDOW_TYPE_NORMAL",
+  ];
+  expect(types).toEqual({
+    attribute: expectedTypes.join(" "),
+    resourceTypes: expectedTypes,
+  });
+});
+
 test("Tk wm alpha updates browser window opacity", async ({ page }) => {
   const script = [
     "toplevel .alpha",
