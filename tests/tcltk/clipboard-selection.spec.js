@@ -140,6 +140,67 @@ test("Tk clipboard get reads text cached from browser paste", async ({
   );
 });
 
+test("DOM paste inserts text into focused Tk entry", async ({ page }) => {
+  const value = "pasted entry \u3042";
+  const script = [
+    "package require Tk",
+    "entry .paste",
+    "pack .paste",
+    "bind .paste <KeyPress> {after 100 {update; browser::setResult [list final [.paste get]]}}",
+    "focus -force .paste",
+    "update",
+    "list ready [winfo id .paste] [focus]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  await expect(page.locator("#tk-browser-result")).toHaveText(/ready /, {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[2], `expected focus on entry: ${ready.join(" ")}`).toBe(
+    ".paste",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.classList.contains("x11-wasm-input"),
+      ),
+    )
+    .toBe(true);
+
+  await page.evaluate((text) => {
+    const input = document.querySelector(".x11-wasm-input");
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    const event = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        /** @param {string} type */
+        getData(type) {
+          return type === "text/plain" ? text : "";
+        },
+      },
+    });
+    input.dispatchEvent(event);
+  }, value);
+
+  await expect(page.locator("#tk-browser-result")).toHaveText(
+    `final {${value}}`,
+    { timeout: 15000 },
+  );
+});
+
 test("Tk clipboard get reads text synced from navigator clipboard", async ({
   page,
 }) => {
