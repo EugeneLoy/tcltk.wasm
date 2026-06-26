@@ -77,6 +77,52 @@ test("Tk visibility events are delivered when windows map", async ({ page }) => 
   expect(result[4]).toBe("VisibilityUnobscured");
 });
 
+test("event generate -subwindow accepts browser window ids", async ({
+  page,
+}) => {
+  const script = [
+    "set ::events {}",
+    "proc ::record {event} {lappend ::events $event}",
+    "frame .parent -width 120 -height 80 -background white",
+    "frame .parent.child -width 30 -height 20 -background blue",
+    "place .parent.child -x 6 -y 7",
+    "pack .parent",
+    "update idletasks",
+    "bind .parent <Motion> {::record [list motion %W %x %y %X %Y %s %S]}",
+    "set childId [winfo id .parent.child]",
+    "event generate .parent <Motion> -x 14 -y 15 -rootx 140 -rooty 150 -state 256 -subwindow $childId",
+    "update",
+    "concat [list ready [llength $::events] [winfo id .parent] $childId] [lindex $::events 0]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(result, `unexpected Tcl result: ${result.join(" ")}`).toHaveLength(12);
+  expect(result[0]).toBe("ready");
+  expect(result[1]).toBe("1");
+  const parentId = Number.parseInt(result[2], 0);
+  const childId = Number.parseInt(result[3], 0);
+  expect(parentId).toBeGreaterThan(0);
+  expect(childId).toBeGreaterThan(0);
+  expect(parentId).not.toBe(childId);
+  expect(result.slice(4, 11)).toEqual([
+    "motion",
+    ".parent",
+    "14",
+    "15",
+    "140",
+    "150",
+    "256",
+  ]);
+  expect(Number.parseInt(result[11], 0)).toBe(childId);
+});
+
 test("DOM input is delivered through Tk window events", async ({ page }) => {
   const script = [
     "set ::events {}",

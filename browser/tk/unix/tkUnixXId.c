@@ -437,6 +437,7 @@ TkpScanWindowId(
     Window *idPtr)
 {
     int code;
+    long id;
     Tcl_Obj obj;
 
     obj.refCount = 1;
@@ -444,7 +445,10 @@ TkpScanWindowId(
     obj.length = strlen(string);
     obj.typePtr = NULL;
 
-    code = Tcl_GetLongFromObj(interp, &obj, (long *)idPtr);
+    code = Tcl_GetLongFromObj(interp, &obj, &id);
+    if (code == TCL_OK) {
+	*idPtr = (Window)id;
+    }
     if (obj.refCount > 1) {
 	Tcl_Panic("invalid sharing of Tcl_Obj on C stack");
     }
