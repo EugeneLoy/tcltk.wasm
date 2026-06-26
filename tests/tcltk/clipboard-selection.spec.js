@@ -575,8 +575,19 @@ test("Tk send registry exposes the browser interpreter locally", async ({
   page,
 }) => {
   const script = [
+    "set original [tk appname]",
     "set names [winfo interps]",
-    "list ready [expr {[llength $names] >= 1}]",
+    "set hasOriginal [expr {$original in $names}]",
+    "set selfResult [send $original {expr {6*7}}]",
+    "set errorStatus [catch {send $original {error {send failure}}} errorMessage]",
+    "set renamed [tk appname BrowserSendHarness]",
+    "set renamedNames [winfo interps]",
+    "set hasRenamed [expr {$renamed in $renamedNames}]",
+    "set oldPresent [expr {$original in $renamedNames}]",
+    "set renamedResult [send $renamed {set ::browserSendValue ok; set ::browserSendValue}]",
+    "set asyncStatus [catch {send -async $renamed {set ::browserAsyncSendValue done}} asyncMessage]",
+    "update",
+    "list ready $hasOriginal $selfResult $errorStatus $errorMessage $hasRenamed $oldPresent $renamedResult $asyncStatus $asyncMessage $::browserAsyncSendValue",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -584,9 +595,7 @@ test("Tk send registry exposes the browser interpreter locally", async ({
   await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
     timeout: 15000,
   });
-  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
-    .trim()
-    .split(/\s+/);
-
-  expect(result).toEqual(["ready", "1"]);
+  await expect(page.locator("#tk-browser-result")).toHaveText(
+    "ready 1 42 1 {send failure} 1 0 ok 0 done done",
+  );
 });
