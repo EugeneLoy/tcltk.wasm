@@ -1137,6 +1137,53 @@ test("global keyboard grab retargets DOM key events through Tk", async ({
   );
 });
 
+test("local keyboard grab retargets DOM key events through Tk", async ({
+  page,
+}) => {
+  const script = [
+    "set ::events {}",
+    "proc ::record {event} {",
+    "    lappend ::events $event",
+    "    browser::setStatus [join $::events {|}]",
+    "}",
+    "frame .grab -width 80 -height 60 -background white -takefocus 1",
+    "frame .outside -width 80 -height 60 -background black -takefocus 1",
+    "pack .grab .outside -side left",
+    "update idletasks",
+    "bind .grab <KeyPress> {::record [list grab-key %K %A %s]}",
+    "bind .outside <KeyPress> {::record [list outside-key %K %A %s]}",
+    "focus -force .outside",
+    "grab set .grab",
+    "list ready [winfo id .grab] [winfo id .outside] [focus] [grab current]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[3], `expected focus on outside window: ${ready.join(" ")}`).toBe(
+    ".outside",
+  );
+  expect(
+    ready[4],
+    `expected local grab on grab window: ${ready.join(" ")}`,
+  ).toBe(".grab");
+
+  const status = page.locator("#tk-browser-status");
+  const root = page.locator("#tk-browser-root");
+  await root.click({ position: { x: 4, y: 4 } });
+  await page.keyboard.type("a");
+  await expect(status).toContainText(/grab-key a a 0/);
+  expect(((await status.textContent()) || "").includes("outside-key a")).toBe(
+    false,
+  );
+});
+
 test("DOM pointer capture keeps pointer sequence on press window", async ({
   page,
 }) => {
