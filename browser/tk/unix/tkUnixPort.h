@@ -76,6 +76,7 @@ extern void TkBrowserSyncMetadataTargets(Display *display);
 extern int TkBrowserXChangeProperty(Display *display, Window window,
 		Atom property, Atom type, int format, int mode,
 		_Xconst unsigned char *data, int nelements);
+extern int TkBrowserXDestroyWindow(Display *display, Window window);
 extern int TkBrowserXSetClassHint(Display *display, Window window,
 		XClassHint *classHints);
 extern int TkBrowserXSetWMHints(Display *display, Window window,
@@ -94,6 +95,7 @@ extern Pixmap TkpCreateNativeBitmap(Display *display, const void *source);
 extern Pixmap TkpGetNativeAppBitmap(Display *display, const char *name,
 	int *width, int *height);
 #define XChangeProperty TkBrowserXChangeProperty
+#define XDestroyWindow TkBrowserXDestroyWindow
 #define XSetClassHint TkBrowserXSetClassHint
 #define XSetWMHints TkBrowserXSetWMHints
 #define XSetWMNormalHints TkBrowserXSetWMNormalHints

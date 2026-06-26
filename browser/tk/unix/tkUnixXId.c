@@ -66,6 +66,7 @@ TkBrowserFindNativeBitmap(
 }
 
 #undef XChangeProperty
+#undef XDestroyWindow
 #undef XSetClassHint
 #undef XSetSelectionOwner
 #undef XSetWMHints
@@ -668,6 +669,35 @@ TkBrowserXSetSelectionOwner(
 	} else if (currentOwner == owner) {
 	    TkBrowserSyncClipboardSelection(syncPtr);
 	}
+    }
+    return result;
+}
+
+int
+TkBrowserXDestroyWindow(
+    Display *display,
+    Window window)
+{
+    TkWindow *winPtr = TkBrowserWindowForXId(display, window);
+    Display *selectionDisplay = (display != NULL) ? display
+	    : ((winPtr != NULL) ? winPtr->display : NULL);
+    Atom clipboardAtom = None;
+    int ownedClipboard = 0;
+    int result;
+
+    if (selectionDisplay != NULL) {
+	clipboardAtom = (winPtr != NULL)
+		? ((winPtr->dispPtr->clipboardAtom != None)
+		? winPtr->dispPtr->clipboardAtom
+		: Tk_InternAtom((Tk_Window)winPtr, "CLIPBOARD"))
+		: XInternAtom(selectionDisplay, "CLIPBOARD", False);
+	ownedClipboard = XGetSelectionOwner(selectionDisplay, clipboardAtom)
+		== window;
+    }
+    result = XDestroyWindow(display, window);
+    if ((result == Success) && ownedClipboard
+	    && (XGetSelectionOwner(selectionDisplay, clipboardAtom) == None)) {
+	(void)X11WasmSetClipboardText("", 0);
     }
     return result;
 }
