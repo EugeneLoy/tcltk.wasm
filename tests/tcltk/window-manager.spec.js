@@ -35,6 +35,37 @@ test("Tk wm title updates the browser document title", async ({ page }) => {
   );
 });
 
+test("Tk wm title clear updates browser title metadata", async ({ page }) => {
+  const script = [
+    "wm title . {Stale Root Title}",
+    "toplevel .titleclear",
+    "wm title .titleclear {Stale Child Title}",
+    "update",
+    "wm title . {}",
+    "wm title .titleclear {}",
+    "update",
+    "join [list [wm title .] [wm title .titleclear] [winfo id .titleclear]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual(["", "", expect.any(String)]);
+  const childId = Number.parseInt(result[2], 0);
+  expect(childId).toBeGreaterThan(0);
+  await expect(page).toHaveTitle("");
+  await expect(
+    page.locator(`[data-x11-wasm-xid="${childId}"]`),
+  ).toHaveAttribute("data-x11-wasm-title", "");
+});
+
 test("Tk wm iconname updates browser window metadata", async ({ page }) => {
   const iconName = "Browser Port Icon Name";
   const script = [
@@ -60,6 +91,35 @@ test("Tk wm iconname updates browser window metadata", async ({ page }) => {
   await expect(page.locator(`[data-x11-wasm-xid="${windowId}"]`)).toHaveAttribute(
     "data-x11-wasm-icon-name",
     iconName,
+  );
+});
+
+test("Tk wm iconname clear updates browser window metadata", async ({ page }) => {
+  const script = [
+    "toplevel .iconnameclear",
+    "wm iconname .iconnameclear {Stale Icon Name}",
+    "update",
+    "wm iconname .iconnameclear {}",
+    "update",
+    "join [list ready [wm iconname .iconnameclear] [winfo id .iconnameclear]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual(["ready", "", expect.any(String)]);
+  const windowId = Number.parseInt(result[2], 0);
+  expect(windowId).toBeGreaterThan(0);
+  await expect(page.locator(`[data-x11-wasm-xid="${windowId}"]`)).toHaveAttribute(
+    "data-x11-wasm-icon-name",
+    "",
   );
 });
 
