@@ -67,6 +67,7 @@ TkBrowserFindNativeBitmap(
 
 #undef XChangeProperty
 #undef XSetClassHint
+#undef XSetSelectionOwner
 #undef XSetWMHints
 #undef XSetWMNormalHints
 #undef XStoreName
@@ -468,11 +469,65 @@ static TkWindow *
 TkBrowserClipboardWindow(
     TkWindow *winPtr)
 {
-    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)
-	    || (winPtr->dispPtr->clipWindow == NULL)) {
+    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)) {
 	return NULL;
     }
+    if (winPtr->dispPtr->clipWindow == NULL) {
+	Tcl_Interp *interp = (winPtr->mainPtr != NULL)
+		? winPtr->mainPtr->interp : NULL;
+
+	if (TkClipInit(interp, winPtr->dispPtr) != TCL_OK) {
+	    return NULL;
+	}
+    }
     return (TkWindow *)winPtr->dispPtr->clipWindow;
+}
+
+static TkWindow *
+TkBrowserWindowForXId(
+    Display *display,
+    Window window)
+{
+    TkDisplay *dispPtr;
+
+    if (window == None) {
+	return NULL;
+    }
+    for (dispPtr = TkGetDisplayList(); dispPtr != NULL;
+	    dispPtr = dispPtr->nextPtr) {
+	Tcl_HashEntry *hPtr;
+	Tcl_HashSearch search;
+
+	if ((display != NULL) && (dispPtr->display != display)) {
+	    continue;
+	}
+	for (hPtr = Tcl_FirstHashEntry(&dispPtr->winTable, &search);
+		hPtr != NULL; hPtr = Tcl_NextHashEntry(&search)) {
+	    TkWindow *winPtr = (TkWindow *)Tcl_GetHashValue(hPtr);
+
+	    if ((winPtr != NULL) && (winPtr->window == window)
+		    && !(winPtr->flags & TK_ALREADY_DEAD)) {
+		return winPtr;
+	    }
+	}
+    }
+    return NULL;
+}
+
+static int
+TkBrowserIsClipboardSelection(
+    TkWindow *winPtr,
+    Atom selection)
+{
+    Atom clipboardAtom;
+
+    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)) {
+	return 0;
+    }
+    clipboardAtom = (winPtr->dispPtr->clipboardAtom != None)
+	    ? winPtr->dispPtr->clipboardAtom
+	    : Tk_InternAtom((Tk_Window)winPtr, "CLIPBOARD");
+    return selection == clipboardAtom;
 }
 
 static void
@@ -519,8 +574,9 @@ TkBrowserSyncClipboardSelection(
     if (clipPtr == NULL) {
 	return;
     }
-    mainPtr = (clipPtr->mainPtr != NULL) ? clipPtr->mainPtr
-	    : clipPtr->dispPtr->clipboardAppPtr;
+    mainPtr = (winPtr->mainPtr != NULL) ? winPtr->mainPtr
+	    : ((clipPtr->mainPtr != NULL) ? clipPtr->mainPtr
+	    : clipPtr->dispPtr->clipboardAppPtr);
     if ((mainPtr == NULL) || (mainPtr->interp == NULL)) {
 	return;
     }
@@ -535,6 +591,24 @@ TkBrowserSyncClipboardSelection(
     (void)TkSelGetSelection(interp, (Tk_Window)clipPtr, clipboardAtom,
 	    targetAtom, TkBrowserDiscardClipboardSelection, NULL);
     (void)Tcl_RestoreInterpState(interp, savedState);
+}
+
+int
+TkBrowserXSetSelectionOwner(
+    Display *display,
+    Atom selection,
+    Window owner,
+    Time time)
+{
+    TkWindow *ownerPtr = TkBrowserWindowForXId(display, owner);
+    int isClipboard = TkBrowserIsClipboardSelection(ownerPtr, selection);
+    int result;
+
+    result = XSetSelectionOwner(display, selection, owner, time);
+    if ((result == Success) && isClipboard) {
+	TkBrowserSyncClipboardSelection(ownerPtr);
+    }
+    return result;
 }
 
 void

@@ -86,6 +86,70 @@ test("Tk clipboard updates browser clipboard bridge", async ({ page }) => {
   ]);
 });
 
+test("Tk CLIPBOARD selection ownership updates browser clipboard bridge", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const clipboard = {
+      writes: [],
+      writeText(text) {
+        this.writes.push(String(text));
+        return Promise.resolve();
+      },
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+  });
+
+  const value = "owned clipboard text \u3055\u3057\u3059";
+  const script = [
+    "package require Tk",
+    `set ::selectionPayload {${value}}`,
+    "proc __tkBrowserClipboardHandler {type offset maxChars} {",
+    "  return $::selectionPayload",
+    "}",
+    "frame .clipOwner",
+    "pack .clipOwner",
+    "selection handle -selection CLIPBOARD .clipOwner {__tkBrowserClipboardHandler STRING} STRING",
+    "selection own -selection CLIPBOARD .clipOwner",
+    "update",
+    "set owner [selection own -selection CLIPBOARD]",
+    "set text [selection get -selection CLIPBOARD]",
+    "list ready $owner $text",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  await expect(page.locator("#tk-browser-result")).toHaveText(
+    `ready .clipOwner {${value}}`,
+  );
+
+  const clipboard = await page.evaluate(async () => {
+    await Promise.resolve();
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: { clipboardText?: string, clipboardWriteStatus?: string } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    const nativeClipboard =
+      /** @type {Navigator & { clipboard?: { writes?: string[] } }} */ (
+        navigator
+      ).clipboard;
+    return {
+      stored: backend?.clipboardText,
+      status: backend?.clipboardWriteStatus,
+      writes: nativeClipboard?.writes || [],
+    };
+  });
+  expect(clipboard.stored).toBe(value);
+  expect(clipboard.status).toBe("written");
+  expect(clipboard.writes).toEqual([value]);
+});
+
 test("Tk clipboard get reads text cached from browser paste", async ({
   page,
 }) => {
