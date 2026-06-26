@@ -69,6 +69,37 @@ test("URL eval scripts are not swallowed by application argv separator", async (
   expect(result).toEqual(["ready", "first", "1", "literal"]);
 });
 
+test("URL eval scripts stop on first error and expose result code", async ({
+  page,
+}) => {
+  const query = new URLSearchParams();
+  query.append("eval", "set ::urlEvalOrder before");
+  query.append("eval", "error \"boom:$::urlEvalOrder\"");
+  query.append("eval", "browser::setResult {after ran}");
+
+  await page.goto(`/tcltk.html?${query.toString()}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval error", {
+    timeout: 15000,
+  });
+  await expect(page.locator("#tk-browser-result")).toHaveText("boom:before");
+  await expect(page.locator("#tk-browser-result")).toHaveAttribute(
+    "data-code",
+    "1",
+  );
+
+  const moduleState = await page.evaluate(() => {
+    const module =
+      /** @type {Window & { Module?: Record<string, unknown> }} */ (window)
+        .Module || {};
+    return {
+      done: module.tkBrowserEvalDone,
+      code: module.tkBrowserEvalCode,
+      result: module.tkBrowserEvalResult,
+    };
+  });
+  expect(moduleState).toEqual({ done: true, code: 1, result: "boom:before" });
+});
+
 test("Tk busy creates an InputOnly browser window without canvas", async ({
   page,
 }) => {
