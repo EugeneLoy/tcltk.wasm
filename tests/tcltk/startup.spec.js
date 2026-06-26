@@ -50,6 +50,25 @@ test("Tk startup options are separated from browser eval scripts", async ({
   ]);
 });
 
+test("URL eval scripts are not swallowed by application argv separator", async ({
+  page,
+}) => {
+  const query = new URLSearchParams();
+  query.append("argv", "--");
+  query.append("arg", "literal");
+  query.append("eval", "set ::urlEvalOrder first");
+  query.append("eval", "list ready $::urlEvalOrder $argc [join $argv ,]");
+
+  await page.goto(`/tcltk.html?${query.toString()}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(result).toEqual(["ready", "first", "1", "literal"]);
+});
+
 test("Tk busy creates an InputOnly browser window without canvas", async ({
   page,
 }) => {

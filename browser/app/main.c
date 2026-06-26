@@ -8,6 +8,7 @@
 
 #include <emscripten.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <tcl.h>
 #include <tk.h>
@@ -233,6 +234,64 @@ BrowserResultCmd(
     return TCL_OK;
 }
 
+static int
+BrowserUrlEvalScriptCount(void)
+{
+    return EM_ASM_INT({
+	const module = globalThis.Module || {};
+	const scripts = module.tkBrowserEvalScripts;
+
+	return Array.isArray(scripts) ? scripts.length : 0;
+    });
+}
+
+static char *
+BrowserCopyUrlEvalScript(
+    int index)
+{
+    return (char *)EM_ASM_PTR({
+	const module = globalThis.Module || {};
+	const scripts = module.tkBrowserEvalScripts;
+
+	if (!Array.isArray(scripts) || ($0 < 0) || ($0 >= scripts.length)
+		|| (typeof scripts[$0] !== "string")) {
+	    return 0;
+	}
+	const script = scripts[$0];
+	const length = lengthBytesUTF8(script) + 1;
+	const ptr = _malloc(length);
+
+	if (!ptr) {
+	    return 0;
+	}
+	stringToUTF8(script, ptr, length);
+	return ptr;
+    }, index);
+}
+
+static int
+BrowserAppendUrlEvalScripts(
+    Tcl_Interp *interp,
+    Tcl_Obj *scriptList)
+{
+    int count = BrowserUrlEvalScriptCount();
+    int i;
+
+    for (i = 0; i < count; i++) {
+	char *script = BrowserCopyUrlEvalScript(i);
+
+	if (script == NULL) {
+	    Tcl_SetObjResult(interp, Tcl_NewStringObj(
+		    "failed to copy browser eval script", -1));
+	    return TCL_ERROR;
+	}
+	Tcl_ListObjAppendElement(interp, scriptList,
+		Tcl_NewStringObj(script, -1));
+	free(script);
+    }
+    return TCL_OK;
+}
+
 static void
 BrowserSetArgVariables(
     Tcl_Interp *interp,
@@ -318,6 +377,11 @@ BrowserRunArgumentScripts(
 	    Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
 	    cleanArgc++;
 	}
+    }
+
+    code = BrowserAppendUrlEvalScripts(interp, scriptList);
+    if (code != TCL_OK) {
+	goto done;
     }
 
     if (Tcl_SetVar2Ex(interp, "argv", NULL, cleanArgvObj,

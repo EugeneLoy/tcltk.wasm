@@ -86,20 +86,21 @@
   <script>
     function tkBrowserArgumentsFromLocation() {
       const params = new URLSearchParams(window.location.search);
-      const args = [
+      return [
         ...params.getAll("argv"),
         ...params.getAll("arg")
       ];
-      const evalScript = params.get("eval");
-      if (evalScript !== null) {
-        args.push("--eval", evalScript);
-      }
-      return args;
+    }
+
+    function tkBrowserEvalScriptsFromLocation() {
+      const params = new URLSearchParams(window.location.search);
+      return params.getAll("eval");
     }
 
     var Module = {
       x11WasmRoot: "#tk-browser-root",
       arguments: tkBrowserArgumentsFromLocation(),
+      tkBrowserEvalScripts: tkBrowserEvalScriptsFromLocation(),
       print: function(text) {
         console.log(text);
       },
