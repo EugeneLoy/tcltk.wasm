@@ -78,6 +78,8 @@ extern int TkBrowserXChangeProperty(Display *display, Window window,
 		_Xconst unsigned char *data, int nelements);
 extern int TkBrowserXSetClassHint(Display *display, Window window,
 		XClassHint *classHints);
+extern int TkBrowserXSetWMHints(Display *display, Window window,
+		XWMHints *wmHints);
 extern int TkBrowserXStoreName(Display *display, Window window,
 		_Xconst char *name);
 extern int TkPutImage(unsigned long *colors, int ncolors, Display *display,
@@ -89,6 +91,7 @@ extern Pixmap TkpGetNativeAppBitmap(Display *display, const char *name,
 	int *width, int *height);
 #define XChangeProperty TkBrowserXChangeProperty
 #define XSetClassHint TkBrowserXSetClassHint
+#define XSetWMHints TkBrowserXSetWMHints
 #define XStoreName TkBrowserXStoreName
 
 /*

@@ -110,6 +110,100 @@ test("Tk wm iconposition updates browser WM_HINTS metadata", async ({
   expect(hints.iconY).toBe("29");
 });
 
+test("Tk wm focusmodel updates browser WM_HINTS input metadata", async ({
+  page,
+}) => {
+  const script = [
+    "toplevel .focusmodel",
+    "label .focusmodel.l -text focus",
+    "pack .focusmodel.l",
+    "update",
+    "wm focusmodel .focusmodel active",
+    "update",
+    "join [list ready [wm focusmodel .focusmodel] [winfo id .focusmodel]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual(["ready", "active", expect.any(String)]);
+  const windowId = Number.parseInt(result[2], 0);
+  expect(windowId).toBeGreaterThan(0);
+  const hints = await page
+    .locator(`[data-x11-wasm-xid="${windowId}"]`)
+    .evaluate((element) => ({
+      flags: Number.parseInt(
+        element.getAttribute("data-x11-wasm-wm-hints-flags") || "0",
+        10,
+      ),
+      input: element.getAttribute("data-x11-wasm-input-hint"),
+      inputEligible: element.getAttribute("data-x11-wasm-input-eligible"),
+    }));
+  expect(hints.flags & (1 << 0)).toBeTruthy();
+  expect(hints.input).toBe("0");
+  expect(hints.inputEligible).toBe("0");
+});
+
+test("Tk wm group updates browser WM_HINTS relation metadata", async ({
+  page,
+}) => {
+  const script = [
+    "toplevel .leader",
+    "toplevel .member",
+    "label .leader.l -text leader",
+    "label .member.l -text member",
+    "pack .leader.l",
+    "pack .member.l",
+    "update",
+    "wm group .member .leader",
+    "update",
+    "join [list ready [wm group .member] [winfo id .leader] [winfo id .member]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    ".leader",
+    expect.any(String),
+    expect.any(String),
+  ]);
+  const leaderId = Number.parseInt(result[2], 0);
+  const memberId = Number.parseInt(result[3], 0);
+  expect(leaderId).toBeGreaterThan(0);
+  expect(memberId).toBeGreaterThan(0);
+  const memberHints = await page
+    .locator(`[data-x11-wasm-xid="${memberId}"]`)
+    .evaluate((element) => ({
+      flags: Number.parseInt(
+        element.getAttribute("data-x11-wasm-wm-hints-flags") || "0",
+        10,
+      ),
+      windowGroup: element.getAttribute("data-x11-wasm-window-group"),
+    }));
+  expect(memberHints.flags & (1 << 6)).toBeTruthy();
+  expect(memberHints.windowGroup).toBe(String(leaderId));
+  const groupMembers = await page
+    .locator(`[data-x11-wasm-xid="${leaderId}"]`)
+    .getAttribute("data-x11-wasm-window-group-members");
+  expect((groupMembers || "").split(/\s+/)).toContain(String(memberId));
+});
+
 test("Tk wm iconwindow displays browser icon proxy while iconic", async ({
   page,
 }) => {
