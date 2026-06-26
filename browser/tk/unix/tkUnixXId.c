@@ -514,19 +514,58 @@ TkBrowserWindowForXId(
     return NULL;
 }
 
+static TkWindow *
+TkBrowserWindowForDisplay(
+    Display *display)
+{
+    TkDisplay *dispPtr;
+
+    for (dispPtr = TkGetDisplayList(); dispPtr != NULL;
+	    dispPtr = dispPtr->nextPtr) {
+	Tcl_HashEntry *hPtr;
+	Tcl_HashSearch search;
+
+	if ((display != NULL) && (dispPtr->display != display)) {
+	    continue;
+	}
+	if (dispPtr->clipWindow != NULL) {
+	    return (TkWindow *)dispPtr->clipWindow;
+	}
+	if ((dispPtr->clipboardAppPtr != NULL)
+		&& (dispPtr->clipboardAppPtr->winPtr != NULL)
+		&& !(dispPtr->clipboardAppPtr->winPtr->flags
+			& TK_ALREADY_DEAD)) {
+	    return dispPtr->clipboardAppPtr->winPtr;
+	}
+	for (hPtr = Tcl_FirstHashEntry(&dispPtr->winTable, &search);
+		hPtr != NULL; hPtr = Tcl_NextHashEntry(&search)) {
+	    TkWindow *winPtr = (TkWindow *)Tcl_GetHashValue(hPtr);
+
+	    if ((winPtr != NULL) && !(winPtr->flags & TK_ALREADY_DEAD)) {
+		return winPtr;
+	    }
+	}
+    }
+    return NULL;
+}
+
 static int
 TkBrowserIsClipboardSelection(
+    Display *display,
     TkWindow *winPtr,
     Atom selection)
 {
     Atom clipboardAtom;
 
-    if ((winPtr == NULL) || (winPtr->dispPtr == NULL)) {
+    if ((winPtr != NULL) && (winPtr->dispPtr != NULL)) {
+	clipboardAtom = (winPtr->dispPtr->clipboardAtom != None)
+		? winPtr->dispPtr->clipboardAtom
+		: Tk_InternAtom((Tk_Window)winPtr, "CLIPBOARD");
+    } else if (display != NULL) {
+	clipboardAtom = XInternAtom(display, "CLIPBOARD", False);
+    } else {
 	return 0;
     }
-    clipboardAtom = (winPtr->dispPtr->clipboardAtom != None)
-	    ? winPtr->dispPtr->clipboardAtom
-	    : Tk_InternAtom((Tk_Window)winPtr, "CLIPBOARD");
     return selection == clipboardAtom;
 }
 
@@ -601,12 +640,30 @@ TkBrowserXSetSelectionOwner(
     Time time)
 {
     TkWindow *ownerPtr = TkBrowserWindowForXId(display, owner);
-    int isClipboard = TkBrowserIsClipboardSelection(ownerPtr, selection);
+    TkWindow *syncPtr = (owner != None) ? ownerPtr
+	    : TkBrowserWindowForDisplay(display);
+    Display *selectionDisplay = (display != NULL) ? display
+	    : ((syncPtr != NULL) ? syncPtr->display : NULL);
+    int isClipboard = TkBrowserIsClipboardSelection(
+	    (owner == None) ? selectionDisplay : NULL, syncPtr, selection);
+    Window previousOwner = None;
     int result;
 
+    if (isClipboard && (selectionDisplay != NULL)) {
+	previousOwner = XGetSelectionOwner(selectionDisplay, selection);
+    }
     result = XSetSelectionOwner(display, selection, owner, time);
     if ((result == Success) && isClipboard) {
-	TkBrowserSyncClipboardSelection(ownerPtr);
+	Window currentOwner = (selectionDisplay != NULL)
+		? XGetSelectionOwner(selectionDisplay, selection) : owner;
+
+	if (owner == None) {
+	    if ((previousOwner != None) && (currentOwner == None)) {
+		(void)X11WasmSetClipboardText("", 0);
+	    }
+	} else if (currentOwner == owner) {
+	    TkBrowserSyncClipboardSelection(syncPtr);
+	}
     }
     return result;
 }
