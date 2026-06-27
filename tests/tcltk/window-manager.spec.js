@@ -1026,6 +1026,101 @@ test("Tk wm stackorder follows raise and lower browser stacking", async ({
   expect(stack.stackAIndex).toBeGreaterThan(stack.stackBIndex);
 });
 
+test("Tk wm manage and forget update browser toplevel metadata", async ({
+  page,
+}) => {
+  const title = "Managed Frame Title";
+  const script = [
+    "frame .managed -width 120 -height 80 -background red",
+    "pack .managed",
+    "update",
+    "set beforeTop [winfo toplevel .managed]",
+    "set beforeManager [winfo manager .managed]",
+    "set beforeId [winfo id .managed]",
+    "wm manage .managed",
+    "wm geometry .managed 120x80+42+48",
+    `wm title .managed {${title}}`,
+    "update",
+    "set managedTop [winfo toplevel .managed]",
+    "set managedManager [winfo manager .managed]",
+    "set managedId [winfo id .managed]",
+    "set managedState [wm state .managed]",
+    "set managedTitle [wm title .managed]",
+    "wm forget .managed",
+    "update",
+    "set forgetTop [winfo toplevel .managed]",
+    "set forgetManager [winfo manager .managed]",
+    "set titleStatus [catch {wm title .managed} titleError]",
+    "pack .managed",
+    "update",
+    "join [list ready $beforeTop $beforeManager $beforeId $managedTop $managedManager $managedId $managedState $managedTitle $forgetTop $forgetManager $titleStatus [winfo manager .managed] [winfo viewable .managed]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    ".",
+    "pack",
+    expect.any(String),
+    ".managed",
+    "wm",
+    expect.any(String),
+    "normal",
+    title,
+    ".",
+    "",
+    "1",
+    "pack",
+    "1",
+  ]);
+  expect(result[6]).toBe(result[3]);
+  const managedId = Number.parseInt(result[6], 0);
+  expect(managedId).toBeGreaterThan(0);
+
+  const snapshot = await page.evaluate(
+    async ({ managedId, title }) => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot & { flush?: Function } } }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      backend?.flush?.();
+      const element = document.querySelector(
+        `[data-x11-wasm-xid="${managedId}"]`,
+      );
+      const resource = backend?.resources.get(managedId);
+      return {
+        hasManagedTitleInAnyWindow: Array.from(
+          document.querySelectorAll(".x11-wasm-window"),
+        ).some((windowElement) =>
+          windowElement.getAttribute("data-x11-wasm-title") === title,
+        ),
+        present: Boolean(element && resource),
+        resourceTitle: resource?.title ?? null,
+        titleAttribute: element?.getAttribute("data-x11-wasm-title") ?? null,
+      };
+    },
+    { managedId, title },
+  );
+  expect(snapshot).toEqual({
+    hasManagedTitleInAnyWindow: false,
+    present: true,
+    resourceTitle: "",
+    titleAttribute: null,
+  });
+});
+
 test("Tk wm protocol updates browser window metadata", async ({ page }) => {
   const protocolName = "MY_BROWSER_PROTOCOL";
   const script = [
