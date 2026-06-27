@@ -2,6 +2,38 @@
 
 const { test, expect } = require("@playwright/test");
 
+/**
+ * @param {import("@playwright/test").Page} page
+ * @param {string} fileName
+ * @param {string} script
+ */
+async function preloadStartupFile(page, fileName, script) {
+  await page.addInitScript(({ fileName, script }) => {
+    const global =
+      /** @type {Window & { Module?: { preRun?: Function[] | Function, FS_createDataFile?: Function } }} */ (
+        window
+      );
+    const module = global.Module || {};
+    const existingPreRun = module.preRun;
+    const preRun = Array.isArray(existingPreRun)
+      ? [...existingPreRun]
+      : existingPreRun
+        ? [existingPreRun]
+        : [];
+
+    preRun.push(() => {
+      const runtimeModule =
+        /** @type {{ FS_createDataFile?: Function }} */ (global.Module || {});
+      if (typeof runtimeModule.FS_createDataFile !== "function") {
+        throw new Error("missing Emscripten FS_createDataFile runtime method");
+      }
+      runtimeModule.FS_createDataFile("/", fileName, script, true, true, true);
+    });
+    module.preRun = preRun;
+    global.Module = module;
+  }, { fileName, script });
+}
+
 test("Tcl/Tk browser harness reaches running state", async ({ page }) => {
   await page.goto("/tcltk.html");
   await expect(page.locator("#tk-browser-status")).toHaveText("running", {
@@ -67,6 +99,52 @@ test("URL eval scripts are not swallowed by application argv separator", async (
     .trim()
     .split(/\s+/);
   expect(result).toEqual(["ready", "first", "1", "literal"]);
+});
+
+test("wish-style script file startup updates argv variables", async ({ page }) => {
+  const script = [
+    "join [list ready $argv0 $argc [llength $argv] [lindex $argv 0] [lindex $argv 1] [info exists geometry]] |",
+  ].join("\n");
+  const query = new URLSearchParams();
+  query.append("argv", "/browser-startup.tcl");
+  query.append("arg", "alpha");
+  query.append("arg", "two words");
+
+  await preloadStartupFile(page, "browser-startup.tcl", script);
+  await page.goto(`/tcltk.html?${query.toString()}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "/browser-startup.tcl",
+    "2",
+    "2",
+    "alpha",
+    "two words",
+    "0",
+  ]);
+});
+
+test("wish-style -file startup option runs a script file", async ({ page }) => {
+  const script = "join [list ready $argv0 $argc [lindex $argv 0]] |";
+  const query = new URLSearchParams();
+  query.append("argv", "-file");
+  query.append("arg", "/browser-file-option.tcl");
+  query.append("arg", "tail");
+
+  await preloadStartupFile(page, "browser-file-option.tcl", script);
+  await page.goto(`/tcltk.html?${query.toString()}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split("|");
+  expect(result).toEqual(["ready", "/browser-file-option.tcl", "1", "tail"]);
 });
 
 test("URL eval scripts stop on first error and expose result code", async ({

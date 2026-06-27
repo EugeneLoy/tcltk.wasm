@@ -97,17 +97,27 @@
       return params.getAll("eval");
     }
 
-    var Module = {
-      x11WasmRoot: "#tk-browser-root",
-      arguments: tkBrowserArgumentsFromLocation(),
-      tkBrowserEvalScripts: tkBrowserEvalScriptsFromLocation(),
-      print: function(text) {
+    var Module = globalThis.Module || {};
+    if (!Object.prototype.hasOwnProperty.call(Module, "x11WasmRoot")) {
+      Module.x11WasmRoot = "#tk-browser-root";
+    }
+    if (!Object.prototype.hasOwnProperty.call(Module, "arguments")) {
+      Module.arguments = tkBrowserArgumentsFromLocation();
+    }
+    if (!Object.prototype.hasOwnProperty.call(Module, "tkBrowserEvalScripts")) {
+      Module.tkBrowserEvalScripts = tkBrowserEvalScriptsFromLocation();
+    }
+    if (!Object.prototype.hasOwnProperty.call(Module, "print")) {
+      Module.print = function(text) {
         console.log(text);
-      },
-      printErr: function(text) {
+      };
+    }
+    if (!Object.prototype.hasOwnProperty.call(Module, "printErr")) {
+      Module.printErr = function(text) {
         console.error(text);
-      }
-    };
+      };
+    }
+    globalThis.Module = Module;
   </script>
   {{{ SCRIPT }}}
 </body>

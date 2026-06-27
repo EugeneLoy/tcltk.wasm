@@ -158,6 +158,44 @@ BrowserEvalAndReport(
     return code;
 }
 
+static int
+BrowserEvalFileAndReport(
+    Tcl_Interp *interp,
+    Tcl_Obj *pathObj,
+    const char *encodingName,
+    const char *label)
+{
+    int code = Tcl_FSEvalFileEx(interp, pathObj, encodingName);
+
+    if (code != TCL_OK) {
+	BrowserConsole("error", label);
+	BrowserConsole("error", Tcl_GetStringResult(interp));
+    }
+    BrowserSetResultObj(code, Tcl_GetObjResult(interp));
+    return code;
+}
+
+static int
+BrowserIsFileOption(
+    const char *arg)
+{
+    size_t length;
+
+    if (arg == NULL) {
+	return 0;
+    }
+    length = strlen(arg);
+    return (length > 1) && (length <= strlen("-file"))
+	    && (strncmp("-file", arg, length) == 0);
+}
+
+static int
+BrowserCanBeStartupScript(
+    const char *arg)
+{
+    return (arg != NULL) && (arg[0] != '-');
+}
+
 static void
 BrowserTestGetWideTime(
     Tcl_Time *timePtr,
@@ -355,12 +393,15 @@ BrowserRunArgumentScripts(
     Tcl_Obj *scriptList = NULL;
     Tcl_Obj *cleanArgvObj = NULL;
     Tcl_Obj *argcObj;
+    Tcl_Obj *startupScriptObj = NULL;
     Tcl_Obj **objv;
     Tcl_Obj **scriptObjv;
+    const char *startupEncoding = NULL;
     int objc = 0;
     int scriptObjc = 0;
     int i;
     int cleanArgc = 0;
+    int allowStartupScript = (BrowserUrlEvalScriptCount() == 0);
     int code = TCL_OK;
 
     *ranScriptPtr = 0;
@@ -387,10 +428,15 @@ BrowserRunArgumentScripts(
     for (i = 0; i < objc; i++) {
 	const char *arg = Tcl_GetString(objv[i]);
 
-	if (strcmp(arg, "--demo") == 0) {
+	if (startupScriptObj != NULL) {
+	    Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
+	    cleanArgc++;
+	} else if (strcmp(arg, "--demo") == 0) {
+	    allowStartupScript = 0;
 	    Tcl_ListObjAppendElement(interp, scriptList,
 		    Tcl_NewStringObj(demoScript, -1));
 	} else if ((strcmp(arg, "--eval") == 0) || (strcmp(arg, "-c") == 0)) {
+	    allowStartupScript = 0;
 	    if ((i + 1) >= objc) {
 		Tcl_SetObjResult(interp, Tcl_NewStringObj(
 			"missing script after --eval", -1));
@@ -404,6 +450,18 @@ BrowserRunArgumentScripts(
 		Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
 		cleanArgc++;
 	    }
+	} else if (allowStartupScript && (strcmp(arg, "-encoding") == 0)
+		&& ((i + 2) < objc)
+		&& BrowserCanBeStartupScript(Tcl_GetString(objv[i + 2]))) {
+	    startupEncoding = Tcl_GetString(objv[i + 1]);
+	    startupScriptObj = objv[i + 2];
+	    i += 2;
+	} else if (allowStartupScript && BrowserIsFileOption(arg)
+		&& ((i + 1) < objc)
+		&& BrowserCanBeStartupScript(Tcl_GetString(objv[i + 1]))) {
+	    startupScriptObj = objv[++i];
+	} else if (allowStartupScript && BrowserCanBeStartupScript(arg)) {
+	    startupScriptObj = objv[i];
 	} else {
 	    Tcl_ListObjAppendElement(interp, cleanArgvObj, objv[i]);
 	    cleanArgc++;
@@ -426,6 +484,18 @@ BrowserRunArgumentScripts(
 	code = TCL_ERROR;
 	goto done;
     }
+    if (startupScriptObj != NULL) {
+	if (Tcl_SetVar(interp, "argv0", Tcl_GetString(startupScriptObj),
+		TCL_GLOBAL_ONLY) == NULL) {
+	    code = TCL_ERROR;
+	    goto done;
+	}
+	if (Tcl_SetVar2Ex(interp, "tcl_interactive", NULL,
+		Tcl_NewBooleanObj(0), TCL_GLOBAL_ONLY) == NULL) {
+	    code = TCL_ERROR;
+	    goto done;
+	}
+    }
 
     if (Tcl_ListObjGetElements(interp, scriptList, &scriptObjc,
 	    &scriptObjv) != TCL_OK) {
@@ -436,6 +506,14 @@ BrowserRunArgumentScripts(
 	*ranScriptPtr = 1;
 	code = BrowserEvalAndReport(interp, Tcl_GetString(scriptObjv[i]),
 		"argument script failed");
+	if (code != TCL_OK) {
+	    goto done;
+	}
+    }
+    if (startupScriptObj != NULL) {
+	*ranScriptPtr = 1;
+	code = BrowserEvalFileAndReport(interp, startupScriptObj,
+		startupEncoding, "startup script failed");
 	if (code != TCL_OK) {
 	    goto done;
 	}
