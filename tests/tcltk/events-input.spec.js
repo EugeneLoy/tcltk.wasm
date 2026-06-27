@@ -386,10 +386,15 @@ test("Tk modifier bindings resolve browser modifier map", async ({ page }) => {
     "    lappend ::events $event",
     "    browser::setStatus [join $::events {|}]",
     "}",
+    "proc ::recordControl {keysym char state} {",
+    "    set code -1",
+    "    if {[string length $char] > 0} {scan $char %c code}",
+    "    ::record [list control $keysym $code $state]",
+    "}",
     "frame .target -width 160 -height 80 -background white -takefocus 1",
     "pack .target",
     "update idletasks",
-    "bind .target <Control-Key-a> {::record [list control %K %A %s]}",
+    "bind .target <Control-Key-a> {::recordControl %K %A %s}",
     "bind .target <Alt-Key-a> {::record [list alt %K %A %s]}",
     "bind .target <Meta-Key-a> {::record [list meta %K %A %s]}",
     "bind .target <KeyPress> {::record [list key %K %k %s]}",
@@ -484,7 +489,7 @@ test("Tk modifier bindings resolve browser modifier map", async ({ page }) => {
     });
   });
 
-  await expect(status).toContainText(/control a a 4/);
+  await expect(status).toContainText(/control a 1 4/);
   await expect(status).toContainText(/alt a a 8/);
   await expect(status).toContainText(/meta a a 64/);
   await expect(status).toContainText(/key Shift_R 161 1/);
