@@ -1377,6 +1377,92 @@ test("Tk wm normal size hints update browser window metadata", async ({
 	expect(hints.styleMaxHeight).toBe("220px");
 });
 
+test("Tk wm positionfrom and sizefrom update size hint source flags", async ({
+  page,
+}) => {
+  const script = [
+    "toplevel .fromUser",
+    "label .fromUser.l -text user",
+    "pack .fromUser.l",
+    "wm geometry .fromUser 220x120+31+41",
+    "wm positionfrom .fromUser user",
+    "wm sizefrom .fromUser user",
+    "toplevel .fromProgram",
+    "label .fromProgram.l -text program",
+    "pack .fromProgram.l",
+    "wm geometry .fromProgram 180x90+51+61",
+    "wm positionfrom .fromProgram program",
+    "wm sizefrom .fromProgram program",
+    "update",
+    "join [list ready [wm positionfrom .fromUser] [wm sizefrom .fromUser] [winfo id .fromUser] [wm positionfrom .fromProgram] [wm sizefrom .fromProgram] [winfo id .fromProgram]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "user",
+    "user",
+    expect.any(String),
+    "program",
+    "program",
+    expect.any(String),
+  ]);
+
+  const userId = Number.parseInt(result[3], 0);
+  const programId = Number.parseInt(result[6], 0);
+  expect(userId).toBeGreaterThan(0);
+  expect(programId).toBeGreaterThan(0);
+
+  const flags = await page.evaluate(({ programId, userId }) => {
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    const snapshot = (id) => {
+      const resource = backend?.resources.get(id);
+      const element = resource?.element;
+      if (!(element instanceof HTMLElement) || !resource) {
+        throw new Error("missing source flag test window");
+      }
+      return {
+        attrFlags: Number.parseInt(
+          element.getAttribute("data-x11-wasm-size-hints-flags") || "0",
+          10,
+        ),
+        resourceFlags: resource.sizeHints?.flags ?? 0,
+      };
+    };
+    return {
+      program: snapshot(programId),
+      user: snapshot(userId),
+    };
+  }, { programId, userId });
+
+  const USPosition = 1 << 0;
+  const USSize = 1 << 1;
+  const PPosition = 1 << 2;
+  const PSize = 1 << 3;
+  expect(flags.user.attrFlags & USPosition).toBeTruthy();
+  expect(flags.user.attrFlags & USSize).toBeTruthy();
+  expect(flags.user.attrFlags & PPosition).toBeFalsy();
+  expect(flags.user.attrFlags & PSize).toBeFalsy();
+  expect(flags.user.resourceFlags).toBe(flags.user.attrFlags);
+  expect(flags.program.attrFlags & PPosition).toBeTruthy();
+  expect(flags.program.attrFlags & PSize).toBeTruthy();
+  expect(flags.program.attrFlags & USPosition).toBeFalsy();
+  expect(flags.program.attrFlags & USSize).toBeFalsy();
+  expect(flags.program.resourceFlags).toBe(flags.program.attrFlags);
+});
+
 test("Tk wm grid updates browser base size and resize increment hints", async ({
   page,
 }) => {
