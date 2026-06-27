@@ -643,6 +643,43 @@ test("Tk primary selection ownership hands off between windows", async ({
   );
 });
 
+test("Tk long primary selection transfers through INCR chunks", async ({
+  page,
+}) => {
+  const script = [
+    "set ::selectionPayload [string repeat abcd 1200]",
+    "set ::selectionRequests {}",
+    "proc __tkBrowserLongSelectionHandler {type offset maxChars} {",
+    "  lappend ::selectionRequests $type $offset $maxChars",
+    "  return [string range $::selectionPayload $offset [expr {$offset + $maxChars - 1}]]",
+    "}",
+    "frame .longSel",
+    "pack .longSel",
+    "selection handle -selection PRIMARY .longSel {__tkBrowserLongSelectionHandler STRING} STRING",
+    "selection own -selection PRIMARY .longSel",
+    "update",
+    "set value [selection get -selection PRIMARY]",
+    "set offsets {}",
+    "foreach {type offset maxChars} $::selectionRequests {lappend offsets $offset}",
+    "list ready [string length $value] [expr {$value eq $::selectionPayload}] [llength $::selectionRequests] [join $offsets ,]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(result[0]).toBe("ready");
+  expect(result[1]).toBe("4800");
+  expect(result[2]).toBe("1");
+  expect(result[3]).toBe("6");
+  expect(result[4]).toBe("0,4000");
+});
+
 test("Tk send registry exposes the browser interpreter locally", async ({
   page,
 }) => {
