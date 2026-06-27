@@ -904,6 +904,128 @@ test("Tk wm transient keeps dialog stacked above parent", async ({ page }) => {
   ).toBe(false);
 });
 
+test("Tk wm stackorder follows raise and lower browser stacking", async ({
+  page,
+}) => {
+  const script = [
+    "proc ::stackIndex {order window} {lsearch -exact $order $window}",
+    "toplevel .stackA",
+    "toplevel .stackB",
+    "toplevel .stackC",
+    "foreach {w color} {.stackA red .stackB green .stackC blue} {",
+    "    wm geometry $w 140x100+30+30",
+    "    frame $w.fill -width 140 -height 100 -background $color",
+    "    pack $w.fill -fill both -expand 1",
+    "}",
+    "update",
+    "raise .stackB",
+    "raise .stackC",
+    "update",
+    "set initial [wm stackorder .]",
+    "set initialOK [expr {[::stackIndex $initial .stackA] < [::stackIndex $initial .stackB] && [::stackIndex $initial .stackB] < [::stackIndex $initial .stackC]}]",
+    "raise .stackA",
+    "update",
+    "set raised [wm stackorder .]",
+    "set raisedOK [expr {[::stackIndex $raised .stackA] > [::stackIndex $raised .stackB] && [::stackIndex $raised .stackA] > [::stackIndex $raised .stackC]}]",
+    "lower .stackC",
+    "update",
+    "set lowered [wm stackorder .]",
+    "set loweredOK [expr {[::stackIndex $lowered .stackC] < [::stackIndex $lowered .stackB] && [::stackIndex $lowered .stackB] < [::stackIndex $lowered .stackA]}]",
+    "join [list ready $initialOK $raisedOK $loweredOK [wm stackorder .stackA isabove .stackB] [wm stackorder .stackC isbelow .stackB] [winfo id .stackA] [winfo id .stackB] [winfo id .stackC]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+  expect(result).toEqual([
+    "ready",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    expect.any(String),
+    expect.any(String),
+    expect.any(String),
+  ]);
+  const stackAId = Number.parseInt(result[6], 0);
+  const stackBId = Number.parseInt(result[7], 0);
+  const stackCId = Number.parseInt(result[8], 0);
+  expect(stackAId).toBeGreaterThan(0);
+  expect(stackBId).toBeGreaterThan(0);
+  expect(stackCId).toBeGreaterThan(0);
+
+  const stack = await page.evaluate(
+    async ({ stackAId, stackBId, stackCId }) => {
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot & { flush?: Function } } }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      backend?.flush?.();
+      const root = document.getElementById("tk-browser-root");
+      const stackA = document.querySelector(
+        `[data-x11-wasm-xid="${stackAId}"]`,
+      );
+      const stackB = document.querySelector(
+        `[data-x11-wasm-xid="${stackBId}"]`,
+      );
+      const stackC = document.querySelector(
+        `[data-x11-wasm-xid="${stackCId}"]`,
+      );
+      if (!root || !stackA || !stackB || !stackC) {
+        throw new Error("missing stackorder test windows");
+      }
+      const stackElementFor = (element) => {
+        let current = element;
+        while (current.parentElement) {
+          const parentWindow = current.parentElement.closest(
+            ".x11-wasm-window",
+          );
+          if (!parentWindow) {
+            break;
+          }
+          current = parentWindow;
+        }
+        return current;
+      };
+      const stackAElement = stackElementFor(stackA);
+      const stackBElement = stackElementFor(stackB);
+      const stackCElement = stackElementFor(stackC);
+      const siblings = Array.from(stackAElement.parentElement?.children || []);
+      const rect = root.getBoundingClientRect();
+      const pointElement = document.elementFromPoint(
+        rect.left + 70,
+        rect.top + 70,
+      );
+      return {
+        hitsA: stackA.contains(pointElement),
+        hitsB: stackB.contains(pointElement),
+        hitsC: stackC.contains(pointElement),
+        stackAIndex: siblings.indexOf(stackAElement),
+        stackBIndex: siblings.indexOf(stackBElement),
+        stackCIndex: siblings.indexOf(stackCElement),
+      };
+    },
+    { stackAId, stackBId, stackCId },
+  );
+  expect(stack.hitsA).toBe(true);
+  expect(stack.hitsB).toBe(false);
+  expect(stack.hitsC).toBe(false);
+  expect(stack.stackCIndex).toBeGreaterThanOrEqual(0);
+  expect(stack.stackBIndex).toBeGreaterThan(stack.stackCIndex);
+  expect(stack.stackAIndex).toBeGreaterThan(stack.stackBIndex);
+});
+
 test("Tk wm protocol updates browser window metadata", async ({ page }) => {
   const protocolName = "MY_BROWSER_PROTOCOL";
   const script = [
