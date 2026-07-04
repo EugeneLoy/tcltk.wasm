@@ -477,6 +477,58 @@ test("DOM paste inserts text into focused Tk entry", async ({ page }) => {
   );
 });
 
+test("browser input does not read native clipboard during normal input", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const clipboard = {
+      reads: 0,
+      readText() {
+        this.reads += 1;
+        return Promise.resolve("native clipboard");
+      },
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+  });
+
+  const script = [
+    "package require Tk",
+    "frame .target -width 120 -height 80 -background white -takefocus 1",
+    "pack .target",
+    "bind .target <KeyPress> {browser::setResult [list key %K %A]}",
+    "update",
+    "list ready [winfo id .target]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const targetId = Number.parseInt(ready[1], 0);
+  expect(targetId, `unexpected target window id: ${ready[1]}`).toBeGreaterThan(
+    0,
+  );
+
+  await page.locator(`[data-x11-wasm-xid="${targetId}"]`).click();
+  await page.keyboard.type("a");
+  await expect(page.locator("#tk-browser-result")).toHaveText("key a a");
+
+  const reads = await page.evaluate(
+    () =>
+      /** @type {Navigator & { clipboard?: { reads?: number } }} */ (navigator)
+        .clipboard?.reads || 0,
+  );
+  expect(reads).toBe(0);
+});
+
 test("Tk clipboard get reads text synced from navigator clipboard", async ({
   page,
 }) => {
