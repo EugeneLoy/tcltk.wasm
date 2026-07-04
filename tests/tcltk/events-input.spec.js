@@ -227,6 +227,88 @@ test("DOM input is delivered through Tk window events", async ({ page }) => {
   await expect(status).toContainText("focusout");
 });
 
+test("Tk entry caret is drawn after browser focus", async ({ page }) => {
+  const script = [
+    "set ::events {}",
+    "proc ::report {} {",
+    "    set bbox {}",
+    "    catch {set bbox [.target bbox insert]}",
+    "    browser::setResult [list state [focus] $::events [.target index insert] $bbox [.target get]]",
+    "}",
+    "entry .target -width 42 -insertbackground red -insertwidth 4 -insertofftime 0 -insertontime 60000",
+    ".target insert 0 abc",
+    "pack .target -padx 20 -pady 20",
+    "update idletasks",
+    "bind .target <FocusIn> {lappend ::events [list in %d %m %W]; after idle ::report}",
+    "bind .target <FocusOut> {lappend ::events [list out %d %m %W]; after idle ::report}",
+    "bind .target <KeyRelease> {after idle ::report}",
+    "list ready [winfo id .target]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-result")).toHaveText(/ready\s+\d+/, {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const targetId = Number.parseInt(ready[1], 0);
+  expect(targetId, `unexpected target window id: ${ready[1]}`).toBeGreaterThan(
+    0,
+  );
+
+  await page.evaluate(() => {
+    const browserWindow =
+      /** @type {Window & { Module?: { x11WasmBackend?: { drawRectangle?: Function, __entryCaretWrapped?: boolean } }, __entryCaretRects?: Array<{ pixel: number, width: number, height: number, fill: boolean }> }} */ (
+        window
+      );
+    const backend = browserWindow.Module?.x11WasmBackend;
+    browserWindow.__entryCaretRects = [];
+    if (!backend?.drawRectangle || backend.__entryCaretWrapped) {
+      return;
+    }
+    const drawRectangle = backend.drawRectangle.bind(backend);
+    backend.drawRectangle = function (id, pixel, x, y, width, height, fill) {
+      browserWindow.__entryCaretRects?.push({ pixel, width, height, fill });
+      return drawRectangle(id, pixel, x, y, width, height, fill);
+    };
+    backend.__entryCaretWrapped = true;
+  });
+
+  const target = page.locator(`[data-x11-wasm-xid="${targetId}"]`);
+  await target.click({ position: { x: 36, y: 10 } });
+  await page.keyboard.type("z");
+  await expect(page.locator("#tk-browser-result")).toContainText(
+    "state .target",
+  );
+
+  const result = (await page.locator("#tk-browser-result").textContent()) || "";
+  expect(result).toContain("{in NotifyAncestor NotifyNormal .target}");
+  expect(result).not.toContain("{out ");
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            (
+              /** @type {Window & { __entryCaretRects?: Array<{ pixel: number, width: number, height: number, fill: boolean }> }} */ (
+                window
+              )
+            ).__entryCaretRects || []
+          ).filter(
+            (rect) =>
+              (rect.pixel & 0xffffff) === 0xff0000 &&
+              rect.fill &&
+              rect.width >= 4 &&
+              rect.height > 0,
+          ).length,
+      ),
+    )
+    .toBeGreaterThan(0);
+});
+
 test("Tk key bindings receive control characters from XLookupString", async ({
   page,
 }) => {

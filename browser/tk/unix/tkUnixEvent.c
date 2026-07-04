@@ -337,6 +337,9 @@ TkBrowserRetargetFocusEvent(
 	    && (eventPtr->type != FocusOut))) {
 	return;
     }
+    if (!eventPtr->xfocus.send_event) {
+	return;
+    }
     targetPtr = (eventPtr->type == FocusIn) ? TkBrowserPointerWindow(dispPtr)
 	    : dispPtr->focusPtr;
     if (targetPtr == NULL) {
@@ -379,7 +382,6 @@ TkBrowserRetargetKeyEvent(
 	}
     } else if (grabWinPtr != NULL) {
 	targetPtr = grabWinPtr;
-	TkSetFocusWin(targetPtr, 0);
     } else if (dispPtr->focusPtr != NULL) {
 	targetPtr = dispPtr->focusPtr;
     }
@@ -412,6 +414,47 @@ TkBrowserRetargetWheelEvent(
 	targetPtr = grabWinPtr;
     }
     TkBrowserRetargetEvent(eventPtr, targetPtr);
+}
+
+static void
+TkBrowserFallbackKeyString(
+    XEvent *eventPtr)
+{
+    char buffer[TCL_DSTRING_STATIC_SIZE];
+    char utfBuffer[TCL_UTF_MAX];
+    const char *valuePtr;
+    int length, valueLength;
+    KeySym keysym = NoSymbol;
+    TkKeyEvent *keyPtr = (TkKeyEvent *)eventPtr;
+
+    if ((eventPtr == NULL) || (eventPtr->type != KeyPress)
+	    || (keyPtr->keysym != NoSymbol) || (keyPtr->charValueLen > 0)) {
+	return;
+    }
+
+    length = XLookupString(&eventPtr->xkey, buffer, (int)sizeof(buffer),
+	    &keysym, NULL);
+    if ((length <= 0) && (keysym == NoSymbol)) {
+	return;
+    }
+    if (length == 1) {
+	valueLength = TkUniCharToUtf((unsigned char)buffer[0], utfBuffer);
+	valuePtr = utfBuffer;
+    } else {
+	valueLength = length;
+	valuePtr = buffer;
+    }
+
+    if (keyPtr->charValuePtr != NULL) {
+	ckfree(keyPtr->charValuePtr);
+    }
+    keyPtr->keysym = keysym;
+    keyPtr->charValuePtr = (char *)ckalloc((size_t)valueLength + 1U);
+    keyPtr->charValueLen = valueLength;
+    if (valueLength > 0) {
+	memcpy(keyPtr->charValuePtr, valuePtr, (size_t)valueLength);
+    }
+    keyPtr->charValuePtr[valueLength] = '\0';
 }
 
 static int
@@ -457,13 +500,13 @@ TkBrowserTransferXEventsToTcl(
 #ifdef TK_USE_INPUT_METHODS
 	    if ((event.type == KeyPress) && (dispPtr != NULL)
 		    && (dispPtr->flags & TK_DISPLAY_USE_IM)
-		    && (lookupWinPtr != NULL)
-		    && (lookupWinPtr->inputContext != NULL)) {
+		    && (lookupWinPtr != NULL)) {
 		Tcl_DString ds;
 
 		Tcl_DStringInit(&ds);
 		(void)TkpGetString(lookupWinPtr, &event.x, &ds);
 		Tcl_DStringFree(&ds);
+		TkBrowserFallbackKeyString(&event.x);
 	    }
 #endif
 	    event.x.xkey.state &= ~X11_WASM_PINNED_KEY_EVENT_STATE;
