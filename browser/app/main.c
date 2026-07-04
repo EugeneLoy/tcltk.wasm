@@ -65,6 +65,25 @@ static const char *shortcutScript =
     "}\n"
     "::browser::installShortcutBindings\n";
 
+static const char *messageBoxScript =
+    "namespace eval ::tk::browser {}\n"
+    "if {[llength [info commands ::tk_messageBox]]\n"
+    "        && ![llength [info commands ::tk::browser::messageBoxFallback]]} {\n"
+    "    rename ::tk_messageBox ::tk::browser::messageBoxFallback\n"
+    "}\n"
+    "proc ::tk_messageBox {args} {\n"
+    "    set code [catch {::browser::messageBox {*}$args} result options]\n"
+    "    if {$code == 0} {\n"
+    "        return $result\n"
+    "    }\n"
+    "    if {[dict exists $options -errorcode]\n"
+    "            && [dict get $options -errorcode] eq {TK BROWSER UNSUPPORTED_MESSAGEBOX_TYPE}\n"
+    "            && [llength [info commands ::tk::browser::messageBoxFallback]]} {\n"
+    "        return [::tk::browser::messageBoxFallback {*}$args]\n"
+    "    }\n"
+    "    return -options $options $result\n"
+    "}\n";
+
 static void
 BrowserConsole(
     const char *level,
@@ -317,6 +336,227 @@ BrowserResultCmd(
 	return TCL_ERROR;
     }
     BrowserSetResultObj(TCL_OK, objv[1]);
+    return TCL_OK;
+}
+
+static char *
+BrowserShowMessageBox(
+    const char *title,
+    const char *message,
+    const char *detail,
+    const char *icon,
+    const char *type,
+    const char *defaultButton)
+{
+    return (char *)EM_ASM_PTR({
+	const title = UTF8ToString($0);
+	const message = UTF8ToString($1);
+	const detail = UTF8ToString($2);
+	const icon = UTF8ToString($3);
+	const type = UTF8ToString($4);
+	const defaultButton = UTF8ToString($5);
+	const module = globalThis.Module || {};
+	let result = "";
+
+	if (typeof module.tkBrowserMessageBox === "function") {
+	    result = module.tkBrowserMessageBox({
+		defaultButton,
+		detail,
+		icon,
+		message,
+		title,
+		type,
+	    });
+	} else {
+	    let text = "";
+
+	    if (title) {
+		text += title;
+	    }
+	    if (message) {
+		text += (text ? "\n\n" : "") + message;
+	    }
+	    if (detail) {
+		text += (text ? "\n\n" : "") + detail;
+	    }
+
+	    if (type === "ok") {
+		globalThis.alert(text);
+		result = "ok";
+	    } else if (type === "okcancel") {
+		result = globalThis.confirm(text) ? "ok" : "cancel";
+	    } else if (type === "retrycancel") {
+		result = globalThis.confirm(text) ? "retry" : "cancel";
+	    } else if (type === "yesno") {
+		result = globalThis.confirm(text) ? "yes" : "no";
+	    }
+	}
+	if (typeof result !== "string") {
+	    result = "";
+	}
+	const length = lengthBytesUTF8(result) + 1;
+	const pointer = _malloc(length);
+
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(result, pointer, length);
+	return pointer;
+    }, title, message, detail, icon, type, defaultButton);
+}
+
+static int
+BrowserMessageBoxResultAllowed(
+    int typeIndex,
+    const char *result)
+{
+    if (result == NULL) {
+	return 0;
+    }
+    switch (typeIndex) {
+    case 1: /* ok */
+	return strcmp(result, "ok") == 0;
+    case 2: /* okcancel */
+	return (strcmp(result, "ok") == 0) || (strcmp(result, "cancel") == 0);
+    case 3: /* retrycancel */
+	return (strcmp(result, "retry") == 0) || (strcmp(result, "cancel") == 0);
+    case 4: /* yesno */
+	return (strcmp(result, "yes") == 0) || (strcmp(result, "no") == 0);
+    default:
+	return 0;
+    }
+}
+
+static int
+BrowserMessageBoxTypeSupported(
+    int typeIndex)
+{
+    return (typeIndex == 1) || (typeIndex == 2) || (typeIndex == 3)
+	    || (typeIndex == 4);
+}
+
+static int
+BrowserUnsupportedMessageBoxType(
+    Tcl_Interp *interp,
+    const char *type)
+{
+    Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+	    "browser native message box cannot represent -type %s", type));
+    Tcl_SetErrorCode(interp, "TK", "BROWSER",
+	    "UNSUPPORTED_MESSAGEBOX_TYPE", NULL);
+    return TCL_ERROR;
+}
+
+static int
+BrowserMessageBoxCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    static const char *const options[] = {
+	"-default", "-detail", "-icon", "-message", "-parent", "-title",
+	"-type", NULL
+    };
+    static const char *const icons[] = {
+	"error", "info", "question", "warning", NULL
+    };
+    static const char *const types[] = {
+	"abortretryignore", "ok", "okcancel", "retrycancel", "yesno",
+	"yesnocancel", NULL
+    };
+    const char *defaultButton = "";
+    const char *detail = "";
+    const char *icon = "info";
+    const char *message = "";
+    const char *title = "";
+    int typeIndex = 1;
+    int i;
+    char *result;
+
+    (void)clientData;
+    if ((objc % 2) == 0) {
+	Tcl_WrongNumArgs(interp, 1, objv, "?option value ...?");
+	return TCL_ERROR;
+    }
+    for (i = 1; i < objc; i += 2) {
+	int optionIndex;
+
+	if (Tcl_GetIndexFromObj(interp, objv[i], options, "option", 0,
+		&optionIndex) != TCL_OK) {
+	    return TCL_ERROR;
+	}
+	switch (optionIndex) {
+	case 0:
+	    defaultButton = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 1:
+	    detail = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 2: {
+	    int iconIndex;
+
+	    if (Tcl_GetIndexFromObj(interp, objv[i + 1], icons, "icon", 0,
+		    &iconIndex) != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    icon = icons[iconIndex];
+	    break;
+	}
+	case 3:
+	    message = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 4:
+	    if (Tcl_GetString(objv[i + 1])[0] != '\0'
+		    && Tk_MainWindow(interp) != NULL
+		    && Tk_NameToWindow(interp, Tcl_GetString(objv[i + 1]),
+			    Tk_MainWindow(interp)) == NULL) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 5:
+	    title = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 6:
+	    if (Tcl_GetIndexFromObj(interp, objv[i + 1], types,
+		    "message box type", 0, &typeIndex) != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	}
+    }
+    if (!BrowserMessageBoxTypeSupported(typeIndex)) {
+	return BrowserUnsupportedMessageBoxType(interp, types[typeIndex]);
+    }
+    if (defaultButton[0] == '\0') {
+	defaultButton = (typeIndex == 4) ? "yes" : types[typeIndex];
+	if (typeIndex == 2) {
+	    defaultButton = "ok";
+	} else if (typeIndex == 3) {
+	    defaultButton = "retry";
+	}
+    } else if (!BrowserMessageBoxResultAllowed(typeIndex, defaultButton)) {
+	Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+		"invalid default button \"%s\" for -type %s", defaultButton,
+		types[typeIndex]));
+	return TCL_ERROR;
+    }
+
+    result = BrowserShowMessageBox(title, message, detail, icon,
+	    types[typeIndex], defaultButton);
+    if (result == NULL) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(
+		"failed to allocate browser message box result", -1));
+	return TCL_ERROR;
+    }
+    if (!BrowserMessageBoxResultAllowed(typeIndex, result)) {
+	Tcl_SetObjResult(interp, Tcl_ObjPrintf(
+		"browser message box returned invalid button \"%s\"", result));
+	free(result);
+	return TCL_ERROR;
+    }
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));
+    free(result);
     return TCL_OK;
 }
 
@@ -611,6 +851,8 @@ main(
 	    NULL, NULL);
     Tcl_CreateObjCommand(interp, "::browser::setResult", BrowserResultCmd,
 	    NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::messageBox", BrowserMessageBoxCmd,
+	    NULL, NULL);
 
     if (Tcl_Init(interp) != TCL_OK) {
 	BrowserConsole("error", "Tcl_Init failed");
@@ -633,6 +875,12 @@ main(
 	    "browser shortcut bindings failed") != TCL_OK) {
 	BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
 	BrowserSetStatus("failed: shortcut bindings");
+	return 1;
+    }
+    if (BrowserEval(interp, messageBoxScript,
+	    "browser message box bindings failed") != TCL_OK) {
+	BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
+	BrowserSetStatus("failed: message box bindings");
 	return 1;
     }
 
