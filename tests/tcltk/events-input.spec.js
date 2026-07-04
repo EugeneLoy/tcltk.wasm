@@ -580,6 +580,80 @@ test("Tk modifier bindings resolve browser modifier map", async ({ page }) => {
   await expect(status).toContainText(/key Meta_R 92 64/);
 });
 
+test("browser command aliases reach Tk virtual and script shortcuts", async ({
+  page,
+}) => {
+  const script = [
+    "set ::events {}",
+    "proc ::report {} {browser::setResult [list events $::events]}",
+    "proc ::record {event} {",
+    "    lappend ::events $event",
+    "    after idle ::report",
+    "}",
+    "entry .target",
+    ".target insert 0 shortcut",
+    ".target selection range 0 end",
+    "pack .target",
+    "bind .target <<Copy>> {::record [list standard copy %W]}",
+    "bind all <Meta-Shift-Key-S> {::record [list script save %W]; break}",
+    "focus -force .target",
+    "update",
+    "list ready [winfo id .target] [focus]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[2], `expected focus on target: ${ready.join(" ")}`).toBe(
+    ".target",
+  );
+
+  await page.evaluate(() => {
+    const input = document.querySelector(".x11-wasm-input");
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    /** @param {KeyboardEventInit} init */
+    const fire = (init) => {
+      for (const type of ["keydown", "keyup"]) {
+        input.dispatchEvent(
+          new KeyboardEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            ...init,
+          }),
+        );
+      }
+    };
+    input.focus();
+    fire({
+      key: "c",
+      code: "KeyC",
+      keyCode: 67,
+      which: 67,
+      metaKey: true,
+    });
+    fire({
+      key: "S",
+      code: "KeyS",
+      keyCode: 83,
+      which: 83,
+      metaKey: true,
+      shiftKey: true,
+    });
+  });
+
+  await expect(page.locator("#tk-browser-result")).toHaveText(
+    "events {{standard copy .target} {script save .target}}",
+  );
+});
+
 test("Tk generated shifted ASCII keysyms infer Shift state", async ({ page }) => {
   const script = [
     "set ::events {}",

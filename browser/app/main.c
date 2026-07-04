@@ -48,6 +48,23 @@ static const char *demoScript =
     "focus -force .root\n"
     "update idletasks\n";
 
+static const char *shortcutScript =
+    "proc ::browser::installShortcutBindings {} {\n"
+    "    foreach {event sequences} {\n"
+    "        <<Cut>> {<Meta-Key-x> <Meta-Lock-Key-X>}\n"
+    "        <<Copy>> {<Meta-Key-c> <Meta-Lock-Key-C>}\n"
+    "        <<Paste>> {<Meta-Key-v> <Meta-Lock-Key-V>}\n"
+    "        <<Undo>> {<Meta-Key-z> <Meta-Lock-Key-Z>}\n"
+    "        <<Redo>> {<Meta-Key-y> <Meta-Lock-Key-Y> <Shift-Meta-Key-z> <Shift-Meta-Lock-Key-Z>}\n"
+    "        <<SelectAll>> {<Meta-Key-a> <Meta-Lock-Key-A>}\n"
+    "    } {\n"
+    "        foreach sequence $sequences {\n"
+    "            catch {event add $event $sequence}\n"
+    "        }\n"
+    "    }\n"
+    "}\n"
+    "::browser::installShortcutBindings\n";
+
 static void
 BrowserConsole(
     const char *level,
@@ -611,6 +628,13 @@ main(
     }
     Tcl_StaticPackage(interp, "Tk", Tk_Init, Tk_SafeInit);
     BrowserConsole("log", "Tk initialized");
+
+    if (BrowserEval(interp, shortcutScript,
+	    "browser shortcut bindings failed") != TCL_OK) {
+	BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
+	BrowserSetStatus("failed: shortcut bindings");
+	return 1;
+    }
 
     code = BrowserRunArgumentScripts(interp, &ranArgumentScript);
     if (code != TCL_OK) {
