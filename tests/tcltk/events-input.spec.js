@@ -309,6 +309,110 @@ test("Tk entry caret is drawn after browser focus", async ({ page }) => {
     .toBeGreaterThan(0);
 });
 
+test("Tk entry caret stays after long digit text", async ({ page }) => {
+  const script = [
+    "set text {123456789012345678901234567890123456}",
+    "entry .target -width 42 -font {Helvetica 12} -foreground black -background white -insertbackground red -insertwidth 3 -insertofftime 0 -insertontime 60000",
+    ".target insert 0 $text",
+    "pack .target -padx 20 -pady 20",
+    "focus -force .target",
+    "update",
+    "list ready [winfo id .target] [.target index insert] [.target get]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[2]).toBe("36");
+  const targetId = Number.parseInt(ready[1], 0);
+  expect(targetId, `unexpected target window id: ${ready[1]}`).toBeGreaterThan(
+    0,
+  );
+
+  const sample = await page
+    .locator(`[data-x11-wasm-xid="${targetId}"] > canvas`)
+    .evaluate(async (canvas) => {
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("missing entry canvas");
+      }
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot } }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      backend?.flush();
+      const context = canvas.getContext("2d");
+      if (!context) {
+        throw new Error("missing entry canvas context");
+      }
+      const { width, height } = canvas;
+      const data = context.getImageData(0, 0, width, height).data;
+      const red = { count: 0, minX: width, maxX: -1, minY: height, maxY: -1 };
+      let darkLeftOfCaret = 0;
+      let darkRightOfCaret = 0;
+
+      for (let offset = 0; offset < data.length; offset += 4) {
+        const pixel = offset / 4;
+        const x = pixel % width;
+        const y = Math.floor(pixel / width);
+        const r = data[offset];
+        const g = data[offset + 1];
+        const b = data[offset + 2];
+        const a = data[offset + 3];
+        if (a > 0 && r > 180 && g < 80 && b < 80) {
+          red.count++;
+          red.minX = Math.min(red.minX, x);
+          red.maxX = Math.max(red.maxX, x);
+          red.minY = Math.min(red.minY, y);
+          red.maxY = Math.max(red.maxY, y);
+        }
+      }
+
+      if (red.count === 0) {
+        return { red, darkLeftOfCaret, darkRightOfCaret, width, height };
+      }
+
+      for (let offset = 0; offset < data.length; offset += 4) {
+        const pixel = offset / 4;
+        const x = pixel % width;
+        const y = Math.floor(pixel / width);
+        const r = data[offset];
+        const g = data[offset + 1];
+        const b = data[offset + 2];
+        const a = data[offset + 3];
+        if (
+          a === 0 ||
+          r >= 80 ||
+          g >= 80 ||
+          b >= 80 ||
+          y < red.minY ||
+          y > red.maxY
+        ) {
+          continue;
+        }
+        if (x < red.minX - 2 && x > 4) {
+          darkLeftOfCaret++;
+        } else if (x > red.maxX + 2 && x < width - 8) {
+          darkRightOfCaret++;
+        }
+      }
+
+      return { red, darkLeftOfCaret, darkRightOfCaret, width, height };
+    });
+
+  expect(sample.red.count).toBeGreaterThan(0);
+  expect(sample.darkLeftOfCaret).toBeGreaterThan(50);
+  expect(sample.darkRightOfCaret).toBe(0);
+});
+
 test("Tk key bindings receive control characters from XLookupString", async ({
   page,
 }) => {

@@ -146,6 +146,11 @@ test("browser text metrics use X11-style unkerned advances", async ({
     const fontFamily = "sans-serif";
     const a = backend.measureText(fontPixelSize, fontFamily, "A");
     const v = backend.measureText(fontPixelSize, fontFamily, "V");
+    const digits = "123456789012345678901234567890123456";
+    const digitSum = Array.from(digits).reduce(
+      (sum, digit) => sum + backend.measureText(12, "Helvetica", digit),
+      0,
+    );
     return {
       singlePairs: (a + v) * 4,
       repeatedPair: backend.measureText(
@@ -153,13 +158,42 @@ test("browser text metrics use X11-style unkerned advances", async ({
         fontFamily,
         "AVAVAVAV",
       ),
+      digitSum,
+      digitRun: backend.measureText(12, "Helvetica", digits),
     };
   });
 
-  expect(metrics.repeatedPair).toBeGreaterThanOrEqual(
-    metrics.singlePairs - 8,
-  );
-  expect(metrics.repeatedPair).toBeLessThanOrEqual(metrics.singlePairs);
+  expect(metrics.repeatedPair).toBe(metrics.singlePairs);
+  expect(metrics.digitRun).toBe(metrics.digitSum);
+});
+
+test("Tk font measures long digit runs as additive advances", async ({
+  page,
+}) => {
+  const script = [
+    "set font [font create -family Helvetica -size 12]",
+    "set text {123456789012345678901234567890123456}",
+    "set full [font measure $font $text]",
+    "set sum 0",
+    "foreach char [split $text {}] {incr sum [font measure $font $char]}",
+    "list ready $full $sum [expr {$full == $sum}]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split(/\s+/);
+
+  expect(result[0], `unexpected Tcl result: ${result.join(" ")}`).toBe("ready");
+  expect(Number(result[1])).toBeGreaterThan(0);
+  expect(result[1]).toBe(result[2]);
+  expect(result[3]).toBe("1");
 });
 
 test("Tk font families expose browser fallback fonts", async ({ page }) => {
