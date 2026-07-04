@@ -2,6 +2,92 @@
 
 const { test, expect } = require("@playwright/test");
 
+/**
+ * @param {import("@playwright/test").Page} page
+ * @param {{ rejectRequest?: boolean }=} options
+ */
+async function installFullscreenHarness(page, options = {}) {
+  await page.addInitScript(
+    ({ rejectRequest }) => {
+      const global =
+        /** @type {Window & { __tkFullscreenHarness?: { activeElement: Element | null, requestCalls: number[], exitCalls: number[] } }} */ (
+          window
+        );
+      const harness = {
+        activeElement: null,
+        requestCalls: [],
+        exitCalls: [],
+      };
+      const xidForElement = (element) =>
+        element instanceof HTMLElement
+          ? Number.parseInt(element.dataset.x11WasmXid || "0", 10) || 0
+          : 0;
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        get: () => harness.activeElement,
+      });
+      Object.defineProperty(document, "exitFullscreen", {
+        configurable: true,
+        value: () => {
+          harness.exitCalls.push(xidForElement(harness.activeElement));
+          harness.activeElement = null;
+          document.dispatchEvent(new Event("fullscreenchange"));
+          return Promise.resolve();
+        },
+      });
+      Object.defineProperty(HTMLElement.prototype, "requestFullscreen", {
+        configurable: true,
+        value: function () {
+          const element = /** @type {Element} */ (this);
+          harness.requestCalls.push(xidForElement(element));
+          if (rejectRequest) {
+            return Promise.reject(
+              new DOMException("user activation required", "NotAllowedError"),
+            );
+          }
+          harness.activeElement = element;
+          document.dispatchEvent(new Event("fullscreenchange"));
+          return Promise.resolve();
+        },
+      });
+      global.__tkFullscreenHarness = harness;
+    },
+    { rejectRequest: !!options.rejectRequest },
+  );
+}
+
+/**
+ * @param {import("@playwright/test").Page} page
+ * @param {number} windowId
+ */
+async function snapshotFullscreenState(page, windowId) {
+  return page.evaluate((windowId) => {
+    const global =
+      /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot }, __tkFullscreenHarness?: { requestCalls: number[], exitCalls: number[] } }} */ (
+        window
+      );
+    const backend = global.Module?.x11WasmBackend;
+    const resource = backend?.resources.get(windowId);
+    const element = resource?.element;
+    if (!backend || !resource || !(element instanceof HTMLElement)) {
+      throw new Error("missing fullscreen snapshot window");
+    }
+    return {
+      attrFullscreen: element.getAttribute("data-x11-wasm-fullscreen"),
+      fullscreen: !!resource.fullscreen,
+      requestCount: backend.fullscreenRequestCount,
+      exitCount: backend.fullscreenExitCount,
+      changeCount: backend.fullscreenChangeCount,
+      errorCount: backend.fullscreenErrorCount,
+      requestWindow: backend.fullscreenRequestWindow,
+      status: backend.fullscreenRequestStatus,
+      error: backend.fullscreenRequestError,
+      requestCalls: global.__tkFullscreenHarness?.requestCalls || [],
+      exitCalls: global.__tkFullscreenHarness?.exitCalls || [],
+    };
+  }, windowId);
+}
+
 test("Tk wm title updates the browser document title", async ({ page }) => {
   const title = "Browser Port WM Title";
   const childTitle = "Child WM Title";
@@ -1532,6 +1618,201 @@ test("Tk wm state attributes update browser window metadata", async ({
   expect(state.rootHeight).toBeGreaterThan(0);
   expect(state.width).toBe(`${state.rootWidth}px`);
   expect(state.height).toBe(`${state.rootHeight}px`);
+});
+
+test("Tk wm fullscreen attribute drives the browser Fullscreen API", async ({
+  page,
+}) => {
+  await installFullscreenHarness(page);
+  const script = [
+    "toplevel .fullscreenApi",
+    "label .fullscreenApi.l -text fullscreen",
+    "pack .fullscreenApi.l",
+    "update",
+    "wm attributes .fullscreenApi -fullscreen 1",
+    "update",
+    "after 500 {wm attributes .fullscreenApi -fullscreen 0; update; browser::setResult [list cleared [wm attributes .fullscreenApi -fullscreen]]}",
+    "list ready [winfo id .fullscreenApi] [wm attributes .fullscreenApi -fullscreen]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const windowId = Number.parseInt(ready[1], 0);
+  expect(windowId).toBeGreaterThan(0);
+  expect(ready[2]).toBe("1");
+  expect(await snapshotFullscreenState(page, windowId)).toMatchObject({
+    attrFullscreen: "1",
+    fullscreen: true,
+    requestCount: 1,
+    exitCount: 0,
+    changeCount: 1,
+    errorCount: 0,
+    requestWindow: windowId,
+    status: "active",
+    error: "",
+    requestCalls: [windowId],
+    exitCalls: [],
+  });
+
+  await expect(page.locator("#tk-browser-result")).toHaveText("cleared 0", {
+    timeout: 15000,
+  });
+  expect(await snapshotFullscreenState(page, windowId)).toMatchObject({
+    attrFullscreen: null,
+    fullscreen: false,
+    requestCount: 1,
+    exitCount: 1,
+    changeCount: 2,
+    errorCount: 0,
+    requestWindow: 0,
+    status: "exited",
+    error: "",
+    requestCalls: [windowId],
+    exitCalls: [windowId],
+  });
+});
+
+test("browser fullscreen exit synchronizes Tk wm fullscreen attribute", async ({
+  page,
+}) => {
+  await installFullscreenHarness(page);
+  const script = [
+    "toplevel .fullscreenExit",
+    "label .fullscreenExit.l -text fullscreen",
+    "pack .fullscreenExit.l",
+    "proc ::reportFullscreenExit {} {",
+    "    update",
+    "    if {[wm attributes .fullscreenExit -fullscreen]} {",
+    "        after 20 ::reportFullscreenExit",
+    "    } else {",
+    "        browser::setResult [list synced [wm attributes .fullscreenExit -fullscreen]]",
+    "    }",
+    "}",
+    "update",
+    "wm attributes .fullscreenExit -fullscreen 1",
+    "update",
+    "after 20 ::reportFullscreenExit",
+    "list ready [winfo id .fullscreenExit] [wm attributes .fullscreenExit -fullscreen]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const windowId = Number.parseInt(ready[1], 0);
+  expect(windowId).toBeGreaterThan(0);
+  expect(ready[2]).toBe("1");
+  expect(await snapshotFullscreenState(page, windowId)).toMatchObject({
+    attrFullscreen: "1",
+    fullscreen: true,
+    requestCount: 1,
+    changeCount: 1,
+    requestWindow: windowId,
+    status: "active",
+  });
+
+  await page.evaluate((windowId) => {
+    const global =
+      /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot & { flush?: Function } }, __tkFullscreenHarness?: { activeElement: Element | null } }} */ (
+        window
+      );
+    if (global.__tkFullscreenHarness) {
+      global.__tkFullscreenHarness.activeElement = null;
+    }
+    document.dispatchEvent(new Event("fullscreenchange"));
+    global.Module?.x11WasmBackend?.flush?.();
+  }, windowId);
+
+  await expect(page.locator("#tk-browser-result")).toHaveText("synced 0", {
+    timeout: 15000,
+  });
+  expect(await snapshotFullscreenState(page, windowId)).toMatchObject({
+    attrFullscreen: null,
+    fullscreen: false,
+    requestCount: 1,
+    exitCount: 0,
+    changeCount: 2,
+    errorCount: 0,
+    requestWindow: 0,
+    status: "exited",
+    requestCalls: [windowId],
+    exitCalls: [],
+  });
+});
+
+test("Tk wm fullscreen records browser request and error outcomes", async ({
+  page,
+}) => {
+  await installFullscreenHarness(page, { rejectRequest: true });
+  const script = [
+    "toplevel .fullscreenError",
+    "label .fullscreenError.l -text fullscreen",
+    "pack .fullscreenError.l",
+    "update",
+    "wm attributes .fullscreenError -fullscreen 1",
+    "update",
+    "list ready [winfo id .fullscreenError] [wm attributes .fullscreenError -fullscreen]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const windowId = Number.parseInt(ready[1], 0);
+  expect(windowId).toBeGreaterThan(0);
+  expect(ready[2]).toBe("1");
+  await page.evaluate(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  const rejected = await snapshotFullscreenState(page, windowId);
+  expect(rejected).toMatchObject({
+    attrFullscreen: "1",
+    fullscreen: true,
+    requestCount: 1,
+    exitCount: 0,
+    changeCount: 0,
+    errorCount: 0,
+    requestWindow: windowId,
+    status: "error",
+    requestCalls: [windowId],
+    exitCalls: [],
+  });
+  expect(rejected.error).toContain("user activation required");
+
+  await page.evaluate(() => {
+    document.dispatchEvent(new Event("fullscreenerror"));
+  });
+  expect(await snapshotFullscreenState(page, windowId)).toMatchObject({
+    attrFullscreen: "1",
+    fullscreen: true,
+    requestCount: 1,
+    exitCount: 0,
+    changeCount: 0,
+    errorCount: 1,
+    requestWindow: windowId,
+    status: "error",
+    error: "fullscreenerror",
+    requestCalls: [windowId],
+    exitCalls: [],
+  });
 });
 
 test("Tk wm normal size hints update browser window metadata", async ({
