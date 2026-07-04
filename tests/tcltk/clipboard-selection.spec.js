@@ -502,11 +502,12 @@ test("DOM paste is delivered through Tk Paste virtual event", async ({
     timeout: 15000,
   });
 
-  await page.evaluate((text) => {
+  const pasteResult = await page.evaluate((text) => {
     const input = document.querySelector(".x11-wasm-input");
     if (!(input instanceof HTMLTextAreaElement)) {
       throw new Error("missing browser input textarea");
     }
+    const beforeRect = input.getBoundingClientRect();
     const event = new Event("paste", {
       bubbles: true,
       cancelable: true,
@@ -519,9 +520,33 @@ test("DOM paste is delivered through Tk Paste virtual event", async ({
         },
       },
     });
-    input.dispatchEvent(event);
+    const dispatchResult = input.dispatchEvent(event);
+    const afterRect = input.getBoundingClientRect();
+    const style = getComputedStyle(input);
+    return {
+      defaultPrevented: event.defaultPrevented,
+      dispatchResult,
+      value: input.value,
+      beforeWidth: beforeRect.width,
+      afterWidth: afterRect.width,
+      afterHeight: afterRect.height,
+      maxWidth: style.maxWidth,
+      overflowX: style.overflowX,
+      wrap: input.wrap,
+    };
   }, value);
 
+  expect(pasteResult).toMatchObject({
+    defaultPrevented: true,
+    dispatchResult: false,
+    value: "",
+    beforeWidth: 1,
+    afterWidth: 1,
+    afterHeight: 1,
+    maxWidth: "1px",
+    overflowX: "hidden",
+    wrap: "off",
+  });
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `events {{paste .paste}} value {${value}}`,
     { timeout: 15000 },

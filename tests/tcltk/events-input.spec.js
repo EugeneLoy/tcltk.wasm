@@ -654,6 +654,97 @@ test("browser command aliases reach Tk virtual and script shortcuts", async ({
   );
 });
 
+test("browser command shortcuts do not select hidden textarea text", async ({
+  page,
+}) => {
+  const script = [
+    "set ::events {}",
+    "proc ::report {} {browser::setResult [list events $::events]}",
+    "proc ::record {event} {",
+    "    lappend ::events $event",
+    "    after idle ::report",
+    "}",
+    "entry .target",
+    "pack .target",
+    "bind .target <Meta-Key-a> {::record [list meta a %s]}",
+    "bind .target <Control-Key-a> {::record [list control a %s]}",
+    "focus -force .target",
+    "update",
+    "list ready [winfo id .target] [focus]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[2], `expected focus on target: ${ready.join(" ")}`).toBe(
+    ".target",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.classList.contains("x11-wasm-input"),
+      ),
+    )
+    .toBe(true);
+
+  const initial = await page.evaluate(() => {
+    const input = document.querySelector(".x11-wasm-input");
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    input.value = "hidden textarea content that must not be selected";
+    input.setSelectionRange(input.value.length, input.value.length);
+    const rect = input.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      selectionStart: input.selectionStart,
+      selectionEnd: input.selectionEnd,
+      valueLength: input.value.length,
+    };
+  });
+  expect(initial).toMatchObject({
+    width: 1,
+    height: 1,
+    selectionStart: initial.valueLength,
+    selectionEnd: initial.valueLength,
+  });
+
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  const expectedEvent =
+    modifier === "Meta" ? /events \{\{meta a 64\}\}/ : /events \{\{control a 4\}\}/;
+  await page.keyboard.down(modifier);
+  await page.keyboard.press("KeyA");
+  const during = await page.evaluate(() => {
+    const input = document.querySelector(".x11-wasm-input");
+    if (!(input instanceof HTMLTextAreaElement)) {
+      throw new Error("missing browser input textarea");
+    }
+    const rect = input.getBoundingClientRect();
+    return {
+      width: rect.width,
+      height: rect.height,
+      selectionStart: input.selectionStart,
+      selectionEnd: input.selectionEnd,
+      valueLength: input.value.length,
+    };
+  });
+  await expect(page.locator("#tk-browser-result")).toHaveText(expectedEvent);
+  expect(during).toMatchObject({
+    width: 1,
+    height: 1,
+    selectionStart: during.valueLength,
+    selectionEnd: during.valueLength,
+  });
+  await page.keyboard.up(modifier);
+});
+
 test("Tk generated shifted ASCII keysyms infer Shift state", async ({ page }) => {
   const script = [
     "set ::events {}",

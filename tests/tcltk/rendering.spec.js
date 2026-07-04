@@ -126,6 +126,42 @@ test("Tk font metrics scale with requested size", async ({ page }) => {
   expect(result[9]).toBe("1");
 });
 
+test("browser text metrics use X11-style unkerned advances", async ({
+  page,
+}) => {
+  await page.goto("/tcltk.html");
+  await expect(page.locator("#tk-browser-status")).toHaveText("running", {
+    timeout: 15000,
+  });
+
+  const metrics = await page.evaluate(() => {
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: { measureText?: Function } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    if (!backend?.measureText) {
+      throw new Error("missing x11 wasm backend text measurement");
+    }
+    const fontPixelSize = 48;
+    const fontFamily = "sans-serif";
+    const a = backend.measureText(fontPixelSize, fontFamily, "A");
+    const v = backend.measureText(fontPixelSize, fontFamily, "V");
+    return {
+      singlePairs: (a + v) * 4,
+      repeatedPair: backend.measureText(
+        fontPixelSize,
+        fontFamily,
+        "AVAVAVAV",
+      ),
+    };
+  });
+
+  expect(metrics.repeatedPair).toBeGreaterThanOrEqual(
+    metrics.singlePairs - 8,
+  );
+  expect(metrics.repeatedPair).toBeLessThanOrEqual(metrics.singlePairs);
+});
+
 test("Tk font families expose browser fallback fonts", async ({ page }) => {
   const script = [
     "set families [font families]",
