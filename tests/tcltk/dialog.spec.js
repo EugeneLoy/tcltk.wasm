@@ -363,6 +363,320 @@ test("Tk open dialog filetypes feed hidden input accept", async ({ page }) => {
   ]);
 });
 
+test("Tk directory dialogs bridge browser directory pickers", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __directoryPickerCalls?: unknown[] }} */ (window);
+
+    target.__directoryPickerCalls = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showDirectoryPicker", {
+      configurable: true,
+      value: async () => {
+        const handle = { kind: "directory", name: "Native Project" };
+        target.__directoryPickerCalls?.push(handle);
+        return handle;
+      },
+    });
+  });
+
+  const script = [
+    "set dirPath [::browser::chooseDirectory -title {Choose directory} -mustexist 1]",
+    "join [list ready [file isdirectory $dirPath] $dirPath] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split("|");
+  expect(result[0]).toBe("ready");
+  expect(result[1]).toBe("1");
+  expect(result[2]).toMatch(/^\/browser\/directory\/[0-9]+-Native_Project$/);
+
+  const state = await page.evaluate((dirPath) => {
+    const module =
+      /** @type {Window & { Module?: { tkBrowserDialogState?: { directoryHandles?: Record<string, unknown> } }, __directoryPickerCalls?: unknown[] }} */ (
+        window
+      ).Module || {};
+    return {
+      calls:
+        /** @type {Window & { __directoryPickerCalls?: unknown[] }} */ (window)
+          .__directoryPickerCalls || [],
+      handle:
+        module.tkBrowserDialogState?.directoryHandles?.[
+          /** @type {string} */ (dirPath)
+        ],
+    };
+  }, result[2]);
+
+  expect(state).toEqual({
+    calls: [{ kind: "directory", name: "Native Project" }],
+    handle: { kind: "directory", name: "Native Project" },
+  });
+});
+
+test("Tk directory hidden input fallback imports selected files", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const click = HTMLInputElement.prototype.click;
+    const target =
+      /** @type {Window & { __directoryInputs?: unknown[] }} */ (window);
+
+    target.__directoryInputs = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showDirectoryPicker", {
+      configurable: true,
+      value: undefined,
+    });
+    HTMLInputElement.prototype.click = function clickDirectoryInput() {
+      const file = new File(["nested text"], "nested.txt", {
+        type: "text/plain",
+      });
+      Object.defineProperty(file, "webkitRelativePath", {
+        configurable: true,
+        value: "Project Folder/sub dir/nested.txt",
+      });
+      target.__directoryInputs?.push({
+        multiple: this.multiple,
+        type: this.type,
+        webkitdirectory: this.webkitdirectory,
+      });
+      Object.defineProperty(this, "files", {
+        configurable: true,
+        value: [file],
+      });
+      this.dispatchEvent(new Event("change"));
+    };
+    window.addEventListener(
+      "pagehide",
+      () => {
+        HTMLInputElement.prototype.click = click;
+      },
+      { once: true },
+    );
+  });
+
+  const script = [
+    "set dirPath [::browser::chooseDirectory -title {Hidden directory}]",
+    "set filePath [file join $dirPath sub_dir nested.txt]",
+    "set fh [open $filePath r]",
+    "set text [read $fh]",
+    "close $fh",
+    "join [list ready [file isdirectory $dirPath] [file exists $filePath] $text] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  expect(((await page.locator("#tk-browser-result").textContent()) || "").trim())
+    .toBe("ready|1|1|nested text");
+
+  const inputs = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __directoryInputs?: unknown[] }} */ (window)
+        .__directoryInputs || []
+    );
+  });
+  expect(inputs).toEqual([
+    {
+      multiple: true,
+      type: "file",
+      webkitdirectory: true,
+    },
+  ]);
+});
+
+test("Tk chooseColor bridges the browser color input", async ({ page }) => {
+  await page.addInitScript(() => {
+    const click = HTMLInputElement.prototype.click;
+    const target =
+      /** @type {Window & { __colorInputs?: unknown[] }} */ (window);
+
+    target.__colorInputs = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    HTMLInputElement.prototype.click = function clickColorInput() {
+      target.__colorInputs?.push({
+        initialValue: this.value,
+        type: this.type,
+      });
+      this.value = "#abcdef";
+      this.dispatchEvent(new Event("change"));
+    };
+    window.addEventListener(
+      "pagehide",
+      () => {
+        HTMLInputElement.prototype.click = click;
+      },
+      { once: true },
+    );
+  });
+
+  const script = [
+    "join [list ready [::browser::chooseColor -title {Pick color} -initialcolor #123456]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  expect((await page.locator("#tk-browser-result").textContent()) || "").toBe(
+    "ready|#abcdef",
+  );
+
+  const inputs = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __colorInputs?: unknown[] }} */ (window)
+        .__colorInputs || []
+    );
+  });
+  expect(inputs).toEqual([{ initialValue: "#123456", type: "color" }]);
+});
+
+test("browser save flush writes File System Access handles", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __saveWrites?: unknown[] }} */ (window);
+
+    target.__saveWrites = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showSaveFilePicker", {
+      configurable: true,
+      value: async () => ({
+        name: "native-save.txt",
+        createWritable: async () => ({
+          close: async () => {
+            target.__saveWrites?.push({ op: "close" });
+          },
+          write: async (bytes) => {
+            target.__saveWrites?.push({
+              op: "write",
+              text: new TextDecoder().decode(bytes),
+            });
+          },
+        }),
+      }),
+    });
+  });
+
+  const script = [
+    "set savePath [::browser::getSaveFile -initialfile native-save -defaultextension .txt]",
+    "set fh [open $savePath w]",
+    "puts -nonewline $fh {native save text}",
+    "close $fh",
+    "::browser::flushSaveFile $savePath",
+    "join [list ready [file exists $savePath]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  expect((await page.locator("#tk-browser-result").textContent()) || "").toBe(
+    "ready|1",
+  );
+
+  const writes = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __saveWrites?: unknown[] }} */ (window)
+        .__saveWrites || []
+    );
+  });
+  expect(writes).toEqual([
+    { op: "write", text: "native save text" },
+    { op: "close" },
+  ]);
+});
+
+test("browser save flush falls back to Blob download", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __downloads?: unknown[], __downloadText?: Promise<string> }} */ (
+        window
+      );
+    const click = HTMLAnchorElement.prototype.click;
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+
+    target.__downloads = [];
+    URL.createObjectURL = (blob) => {
+      target.__downloadText = blob.text();
+      return "blob:tk-browser-test";
+    };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function clickDownload() {
+      target.__downloads?.push({
+        download: this.download,
+        href: this.href,
+      });
+    };
+    window.addEventListener(
+      "pagehide",
+      () => {
+        HTMLAnchorElement.prototype.click = click;
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+      },
+      { once: true },
+    );
+  });
+
+  const script = [
+    "set path blob-save.txt",
+    "set fh [open $path w]",
+    "puts -nonewline $fh {blob save text}",
+    "close $fh",
+    "::browser::flushSaveFile $path exported.txt",
+    "join [list ready [file exists $path]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  expect((await page.locator("#tk-browser-result").textContent()) || "").toBe(
+    "ready|1",
+  );
+
+  const download = await page.evaluate(async () => {
+    const target =
+      /** @type {Window & { __downloads?: unknown[], __downloadText?: Promise<string> }} */ (
+        window
+      );
+    return {
+      downloads: target.__downloads || [],
+      text: await target.__downloadText,
+    };
+  });
+  expect(download).toEqual({
+    downloads: [{ download: "exported.txt", href: "blob:tk-browser-test" }],
+    text: "blob save text",
+  });
+});
+
 test("Tk native file dialogs return empty strings on browser cancel", async ({
   page,
 }) => {
