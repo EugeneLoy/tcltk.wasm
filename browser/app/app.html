@@ -472,7 +472,7 @@ list ok [winfo children .]</textarea>
         return pointer;
       }
 
-      function evalTcl(script, echo) {
+      async function evalTcl(script, echo) {
         const module = globalThis.Module || {};
         const evalFn = module._TkBrowserEval;
         const free = module._free;
@@ -488,7 +488,10 @@ list ok [winfo children .]</textarea>
         }
         try {
           pointer = writeCString(script);
-          code = evalFn(pointer);
+          const value = evalFn(pointer);
+          code = value && typeof value.then === "function"
+            ? await value
+            : value;
         } catch (error) {
           appendOutput("! ", error instanceof Error ? error.message : String(error));
           return 1;
@@ -502,7 +505,7 @@ list ok [winfo children .]</textarea>
         return code;
       }
 
-      function runCommand() {
+      async function runCommand() {
         if (!(commandElement instanceof HTMLTextAreaElement)) {
           return;
         }
@@ -512,7 +515,7 @@ list ok [winfo children .]</textarea>
         }
         history.push(script);
         historyIndex = history.length;
-        evalTcl(script, true);
+        await evalTcl(script, true);
       }
 
       function setCommandFromHistory(delta) {
@@ -527,8 +530,8 @@ list ok [winfo children .]</textarea>
         runButton.addEventListener("click", runCommand);
       }
       if (demoButton) {
-        demoButton.addEventListener("click", () => {
-          evalTcl(demoScript(), true);
+        demoButton.addEventListener("click", async () => {
+          await evalTcl(demoScript(), true);
         });
       }
       if (clearButton && outputElement) {

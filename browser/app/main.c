@@ -7,6 +7,7 @@
  */
 
 #include <emscripten.h>
+#include <emscripten/em_js.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,23 +66,44 @@ static const char *shortcutScript =
     "}\n"
     "::browser::installShortcutBindings\n";
 
-static const char *messageBoxScript =
+static const char *nativeDialogScript =
     "namespace eval ::tk::browser {}\n"
-    "if {[llength [info commands ::tk_messageBox]]\n"
-    "        && ![llength [info commands ::tk::browser::messageBoxFallback]]} {\n"
-    "    rename ::tk_messageBox ::tk::browser::messageBoxFallback\n"
-    "}\n"
-    "proc ::tk_messageBox {args} {\n"
-    "    set code [catch {::browser::messageBox {*}$args} result options]\n"
-    "    if {$code == 0} {\n"
-    "        return $result\n"
+    "foreach {name fallback} {\n"
+    "    tk_chooseColor chooseColorFallback\n"
+    "    tk_chooseDirectory chooseDirectoryFallback\n"
+    "    tk_getOpenFile getOpenFileFallback\n"
+    "    tk_getSaveFile getSaveFileFallback\n"
+    "    tk_messageBox messageBoxFallback\n"
+    "} {\n"
+    "    if {[llength [info commands ::$name]]\n"
+    "            && ![llength [info commands ::tk::browser::$fallback]]} {\n"
+    "        rename ::$name ::tk::browser::$fallback\n"
     "    }\n"
+    "}\n"
+    "proc ::tk::browser::nativeOrFallback {native fallback args} {\n"
+    "    set code [catch {{*}$native {*}$args} result options]\n"
+    "    if {$code == 0} {return $result}\n"
     "    if {[dict exists $options -errorcode]\n"
-    "            && [dict get $options -errorcode] eq {TK BROWSER UNSUPPORTED_MESSAGEBOX_TYPE}\n"
-    "            && [llength [info commands ::tk::browser::messageBoxFallback]]} {\n"
-    "        return [::tk::browser::messageBoxFallback {*}$args]\n"
+    "            && [lrange [dict get $options -errorcode] 0 2] eq {TK BROWSER DIALOG_UNAVAILABLE}\n"
+    "            && [llength [info commands $fallback]]} {\n"
+    "        return [{*}$fallback {*}$args]\n"
     "    }\n"
     "    return -options $options $result\n"
+    "}\n"
+    "proc ::tk_chooseColor {args} {\n"
+    "    return [::tk::browser::nativeOrFallback ::browser::chooseColor ::tk::browser::chooseColorFallback {*}$args]\n"
+    "}\n"
+    "proc ::tk_chooseDirectory {args} {\n"
+    "    return [::tk::browser::nativeOrFallback ::browser::chooseDirectory ::tk::browser::chooseDirectoryFallback {*}$args]\n"
+    "}\n"
+    "proc ::tk_getOpenFile {args} {\n"
+    "    return [::tk::browser::nativeOrFallback ::browser::getOpenFile ::tk::browser::getOpenFileFallback {*}$args]\n"
+    "}\n"
+    "proc ::tk_getSaveFile {args} {\n"
+    "    return [::tk::browser::nativeOrFallback ::browser::getSaveFile ::tk::browser::getSaveFileFallback {*}$args]\n"
+    "}\n"
+    "proc ::tk_messageBox {args} {\n"
+    "    return [::tk::browser::nativeOrFallback ::browser::messageBox ::tk::browser::messageBoxFallback {*}$args]\n"
     "}\n";
 
 static void
@@ -339,6 +361,857 @@ BrowserResultCmd(
     return TCL_OK;
 }
 
+#define BROWSER_DIALOG_UNSUPPORTED "__TK_BROWSER_DIALOG_UNSUPPORTED__"
+#define BROWSER_DIALOG_ERROR_PREFIX "__TK_BROWSER_DIALOG_ERROR__:"
+
+static int
+BrowserDialogUnavailable(
+    Tcl_Interp *interp,
+    const char *message)
+{
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(message, -1));
+    Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_UNAVAILABLE", NULL);
+    return TCL_ERROR;
+}
+
+static int
+BrowserDialogError(
+    Tcl_Interp *interp,
+    const char *message)
+{
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(message, -1));
+    Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_ERROR", NULL);
+    return TCL_ERROR;
+}
+
+static int
+BrowserValidateParent(
+    Tcl_Interp *interp,
+    const char *parent)
+{
+    if ((parent == NULL) || (parent[0] == '\0') || (Tk_MainWindow(interp) == NULL)) {
+	return TCL_OK;
+    }
+    return (Tk_NameToWindow(interp, parent, Tk_MainWindow(interp)) != NULL)
+	    ? TCL_OK : TCL_ERROR;
+}
+
+static int
+BrowserDialogStringResult(
+    Tcl_Interp *interp,
+    char *result)
+{
+    size_t errorPrefixLength = strlen(BROWSER_DIALOG_ERROR_PREFIX);
+
+    if (result == NULL) {
+	return BrowserDialogError(interp, "failed to allocate browser dialog result");
+    }
+    if (strcmp(result, BROWSER_DIALOG_UNSUPPORTED) == 0) {
+	free(result);
+	return BrowserDialogUnavailable(interp,
+		"browser native dialog is not available");
+    }
+    if (strncmp(result, BROWSER_DIALOG_ERROR_PREFIX, errorPrefixLength) == 0) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(
+		result + errorPrefixLength, -1));
+	free(result);
+	Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_ERROR", NULL);
+	return TCL_ERROR;
+    }
+    Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));
+    free(result);
+    return TCL_OK;
+}
+
+static int
+BrowserDialogPathListResult(
+    Tcl_Interp *interp,
+    char *result,
+    int multiple)
+{
+    Tcl_Obj *listObj;
+    char *start;
+    char *newline;
+    size_t errorPrefixLength = strlen(BROWSER_DIALOG_ERROR_PREFIX);
+
+    if (result == NULL) {
+	return BrowserDialogError(interp, "failed to allocate browser dialog result");
+    }
+    if (strcmp(result, BROWSER_DIALOG_UNSUPPORTED) == 0) {
+	free(result);
+	return BrowserDialogUnavailable(interp,
+		"browser native dialog is not available");
+    }
+    if (strncmp(result, BROWSER_DIALOG_ERROR_PREFIX, errorPrefixLength) == 0) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(
+		result + errorPrefixLength, -1));
+	free(result);
+	Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_ERROR", NULL);
+	return TCL_ERROR;
+    }
+    if (result[0] == '\0') {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj("", 0));
+	free(result);
+	return TCL_OK;
+    }
+    if (!multiple) {
+	newline = strchr(result, '\n');
+	if (newline != NULL) {
+	    *newline = '\0';
+	}
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));
+	free(result);
+	return TCL_OK;
+    }
+
+    listObj = Tcl_NewListObj(0, NULL);
+    start = result;
+    while (start[0] != '\0') {
+	newline = strchr(start, '\n');
+	if (newline != NULL) {
+	    *newline = '\0';
+	}
+	Tcl_ListObjAppendElement(interp, listObj, Tcl_NewStringObj(start, -1));
+	if (newline == NULL) {
+	    break;
+	}
+	start = newline + 1;
+    }
+    Tcl_SetObjResult(interp, listObj);
+    free(result);
+    return TCL_OK;
+}
+
+EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
+    const char *titlePtr,
+    const char *initialDirPtr,
+    const char *initialFilePtr,
+    const char *fileTypesPtr,
+    int multiple), {
+    const title = UTF8ToString(titlePtr);
+    const initialDir = UTF8ToString(initialDirPtr);
+    const initialFile = UTF8ToString(initialFilePtr);
+    const fileTypes = UTF8ToString(fileTypesPtr);
+    const module = globalThis.Module || {};
+
+    function allocateString(text) {
+	const value = String(text || "");
+	const length = lengthBytesUTF8(value) + 1;
+	const pointer = _malloc(length);
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(value, pointer, length);
+	return pointer;
+    }
+
+    function unsupported() {
+	return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
+    }
+
+    function errorResult(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
+    }
+
+    function dialogState() {
+	const state = module.tkBrowserDialogState || {};
+	if (!state.nextId) {
+	    state.nextId = 1;
+	}
+	if (!state.saveHandles) {
+	    state.saveHandles = {};
+	}
+	if (!state.directoryHandles) {
+	    state.directoryHandles = {};
+	}
+	module.tkBrowserDialogState = state;
+	return state;
+    }
+
+    function hasUserActivation() {
+	const activation = globalThis.navigator && globalThis.navigator.userActivation;
+	return !activation || !!activation.isActive;
+    }
+
+    function sanitizeName(name) {
+	let cleaned = "";
+	for (const char of String(name || "file")) {
+	    const code = char.charCodeAt(0);
+	    const allowed = (code >= 48 && code <= 57)
+		|| (code >= 65 && code <= 90)
+		|| (code >= 97 && code <= 122)
+		|| code === 45 || code === 46 || code === 95;
+	    cleaned += allowed ? char : "_";
+	}
+	while (cleaned.startsWith("_")) {
+	    cleaned = cleaned.slice(1);
+	}
+	while (cleaned.endsWith("_")) {
+	    cleaned = cleaned.slice(0, -1);
+	}
+	return cleaned || "file";
+    }
+
+    function mkdirTree(path) {
+	if (typeof FS.mkdirTree === "function") {
+	    FS.mkdirTree(path);
+	    return;
+	}
+	const parts = path.split("/").filter(Boolean);
+	let current = "";
+	for (const part of parts) {
+	    current += "/" + part;
+	    try {
+		FS.mkdir(current);
+	    } catch (error) {
+		if (!/File exists|EEXIST/.test(String(error && error.message))) {
+		    throw error;
+		}
+	    }
+	}
+    }
+
+    function virtualPath(kind, name) {
+	const state = dialogState();
+	const id = state.nextId++;
+	return `/browser/${kind}/${id}-${sanitizeName(name)}`;
+    }
+
+    async function bytesForEntry(entry) {
+	if (entry instanceof File || entry instanceof Blob) {
+	    return new Uint8Array(await entry.arrayBuffer());
+	}
+	if (entry && typeof entry.arrayBuffer === "function") {
+	    return new Uint8Array(await entry.arrayBuffer());
+	}
+	if (entry && entry.bytes !== undefined) {
+	    return entry.bytes instanceof Uint8Array
+		? entry.bytes
+		: new Uint8Array(entry.bytes);
+	}
+	if (entry && entry.text !== undefined) {
+	    return new TextEncoder().encode(String(entry.text));
+	}
+	if (entry && entry.content !== undefined) {
+	    return new TextEncoder().encode(String(entry.content));
+	}
+	return new Uint8Array();
+    }
+
+    async function importEntry(entry) {
+	if (typeof entry === "string") {
+	    return entry;
+	}
+	if (entry && entry.path && entry.bytes === undefined
+		&& entry.text === undefined && entry.content === undefined
+		&& typeof entry.arrayBuffer !== "function") {
+	    return String(entry.path);
+	}
+	const name = entry && entry.name ? entry.name : "file";
+	const path = entry && entry.path ? String(entry.path) : virtualPath("open", name);
+	const slash = path.lastIndexOf("/");
+	if (slash > 0) {
+	    mkdirTree(path.slice(0, slash));
+	}
+	FS.writeFile(path, await bytesForEntry(entry));
+	return path;
+    }
+
+    async function hookFiles() {
+	if (typeof module.tkBrowserOpenFile === "function") {
+	    const value = await module.tkBrowserOpenFile({
+		fileTypes,
+		initialDir,
+		initialFile,
+		multiple: !!multiple,
+		title,
+	    });
+	    if (!value) {
+		return [];
+	    }
+	    if (Array.isArray(value)) {
+		return value;
+	    }
+	    if (Array.isArray(value.files)) {
+		return value.files;
+	    }
+	    return [value];
+	}
+	return null;
+    }
+
+    try {
+	const hooked = await hookFiles();
+	let entries = hooked;
+	if (entries === null) {
+	    if (!hasUserActivation()) {
+		return unsupported();
+	    }
+	    if (typeof globalThis.showOpenFilePicker === "function") {
+		try {
+		    const handles = await globalThis.showOpenFilePicker({
+			multiple: !!multiple,
+		    });
+		    entries = [];
+		    for (const handle of handles) {
+			entries.push(await handle.getFile());
+		    }
+		} catch (error) {
+		    if (error && error.name === "AbortError") {
+			return allocateString("");
+		    }
+		    return unsupported();
+		}
+	    } else if (typeof document !== "undefined") {
+		entries = await new Promise((resolve) => {
+		    const input = document.createElement("input");
+		    let settled = false;
+		    input.type = "file";
+		    input.multiple = !!multiple;
+		    input.style.position = "fixed";
+		    input.style.left = "-10000px";
+		    input.style.top = "0";
+		    input.addEventListener("change", () => {
+			if (settled) {
+			    return;
+			}
+			settled = true;
+			const files = input.files ? Array.from(input.files) : [];
+			input.remove();
+			resolve(files);
+		    }, { once: true });
+		    input.addEventListener("cancel", () => {
+			if (settled) {
+			    return;
+			}
+			settled = true;
+			input.remove();
+			resolve([]);
+		    }, { once: true });
+		    document.body.appendChild(input);
+		    input.click();
+		});
+	    } else {
+		return unsupported();
+	    }
+	}
+	const paths = [];
+	for (const entry of entries || []) {
+	    paths.push(await importEntry(entry));
+	}
+	return allocateString(paths.join("\n"));
+    } catch (error) {
+	return errorResult(error);
+    }
+});
+
+EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
+    const char *titlePtr,
+    const char *initialDirPtr,
+    const char *initialFilePtr,
+    const char *defaultExtensionPtr,
+    const char *fileTypesPtr), {
+    const title = UTF8ToString(titlePtr);
+    const initialDir = UTF8ToString(initialDirPtr);
+    const initialFile = UTF8ToString(initialFilePtr);
+    const defaultExtension = UTF8ToString(defaultExtensionPtr);
+    const fileTypes = UTF8ToString(fileTypesPtr);
+    const module = globalThis.Module || {};
+
+    function allocateString(text) {
+	const value = String(text || "");
+	const length = lengthBytesUTF8(value) + 1;
+	const pointer = _malloc(length);
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(value, pointer, length);
+	return pointer;
+    }
+
+    function unsupported() {
+	return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
+    }
+
+    function errorResult(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
+    }
+
+    function dialogState() {
+	const state = module.tkBrowserDialogState || {};
+	if (!state.nextId) {
+	    state.nextId = 1;
+	}
+	if (!state.saveHandles) {
+	    state.saveHandles = {};
+	}
+	if (!state.directoryHandles) {
+	    state.directoryHandles = {};
+	}
+	module.tkBrowserDialogState = state;
+	return state;
+    }
+
+    function hasUserActivation() {
+	const activation = globalThis.navigator && globalThis.navigator.userActivation;
+	return !activation || !!activation.isActive;
+    }
+
+    function sanitizeName(name) {
+	let cleaned = "";
+	for (const char of String(name || "untitled")) {
+	    const code = char.charCodeAt(0);
+	    const allowed = (code >= 48 && code <= 57)
+		|| (code >= 65 && code <= 90)
+		|| (code >= 97 && code <= 122)
+		|| code === 45 || code === 46 || code === 95;
+	    cleaned += allowed ? char : "_";
+	}
+	while (cleaned.startsWith("_")) {
+	    cleaned = cleaned.slice(1);
+	}
+	while (cleaned.endsWith("_")) {
+	    cleaned = cleaned.slice(0, -1);
+	}
+	return cleaned || "untitled";
+    }
+
+    function mkdirTree(path) {
+	if (typeof FS.mkdirTree === "function") {
+	    FS.mkdirTree(path);
+	    return;
+	}
+	const parts = path.split("/").filter(Boolean);
+	let current = "";
+	for (const part of parts) {
+	    current += "/" + part;
+	    try {
+		FS.mkdir(current);
+	    } catch (error) {
+		if (!/File exists|EEXIST/.test(String(error && error.message))) {
+		    throw error;
+		}
+	    }
+	}
+    }
+
+    function suggestedName() {
+	let name = initialFile || "untitled";
+	if (defaultExtension && defaultExtension !== "." && !name.includes(".")) {
+	    name += defaultExtension.startsWith(".")
+		? defaultExtension
+		: "." + defaultExtension;
+	}
+	return name;
+    }
+
+    function virtualPath(name) {
+	const state = dialogState();
+	const id = state.nextId++;
+	return `/browser/save/${id}-${sanitizeName(name)}`;
+    }
+
+    try {
+	let value = null;
+	if (typeof module.tkBrowserSaveFile === "function") {
+	    value = await module.tkBrowserSaveFile({
+		defaultExtension,
+		fileTypes,
+		initialDir,
+		initialFile,
+		title,
+	    });
+	    if (!value) {
+		return allocateString("");
+	    }
+	} else if (typeof globalThis.showSaveFilePicker === "function") {
+	    if (!hasUserActivation()) {
+		return unsupported();
+	    }
+	    try {
+		const handle = await globalThis.showSaveFilePicker({
+		    suggestedName: suggestedName(),
+		});
+		const path = virtualPath(handle && handle.name ? handle.name : suggestedName());
+		const slash = path.lastIndexOf("/");
+		if (slash > 0) {
+		    mkdirTree(path.slice(0, slash));
+		}
+		FS.writeFile(path, new Uint8Array());
+		dialogState().saveHandles[path] = handle;
+		return allocateString(path);
+	    } catch (error) {
+		if (error && error.name === "AbortError") {
+		    return allocateString("");
+		}
+		return unsupported();
+	    }
+	} else {
+	    return unsupported();
+	}
+	if (typeof value === "string") {
+	    return allocateString(value);
+	}
+	const name = value.name || suggestedName();
+	const path = value.path ? String(value.path) : virtualPath(name);
+	const slash = path.lastIndexOf("/");
+	if (slash > 0) {
+	    mkdirTree(path.slice(0, slash));
+	}
+	if (value.bytes !== undefined) {
+	    FS.writeFile(path, value.bytes instanceof Uint8Array
+		? value.bytes
+		: new Uint8Array(value.bytes));
+	} else if (value.text !== undefined || value.content !== undefined) {
+	    FS.writeFile(path, new TextEncoder().encode(
+		String(value.text !== undefined ? value.text : value.content)));
+	} else {
+	    FS.writeFile(path, new Uint8Array());
+	}
+	if (value.handle) {
+	    dialogState().saveHandles[path] = value.handle;
+	}
+	return allocateString(path);
+    } catch (error) {
+	return errorResult(error);
+    }
+});
+
+EM_ASYNC_JS(char *, BrowserChooseDirectory, (
+    const char *titlePtr,
+    const char *initialDirPtr,
+    int mustExist), {
+    const title = UTF8ToString(titlePtr);
+    const initialDir = UTF8ToString(initialDirPtr);
+    const module = globalThis.Module || {};
+
+    function allocateString(text) {
+	const value = String(text || "");
+	const length = lengthBytesUTF8(value) + 1;
+	const pointer = _malloc(length);
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(value, pointer, length);
+	return pointer;
+    }
+
+    function unsupported() {
+	return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
+    }
+
+    function errorResult(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
+    }
+
+    function dialogState() {
+	const state = module.tkBrowserDialogState || {};
+	if (!state.nextId) {
+	    state.nextId = 1;
+	}
+	if (!state.saveHandles) {
+	    state.saveHandles = {};
+	}
+	if (!state.directoryHandles) {
+	    state.directoryHandles = {};
+	}
+	module.tkBrowserDialogState = state;
+	return state;
+    }
+
+    function hasUserActivation() {
+	const activation = globalThis.navigator && globalThis.navigator.userActivation;
+	return !activation || !!activation.isActive;
+    }
+
+    function sanitizeName(name) {
+	let cleaned = "";
+	for (const char of String(name || "directory")) {
+	    const code = char.charCodeAt(0);
+	    const allowed = (code >= 48 && code <= 57)
+		|| (code >= 65 && code <= 90)
+		|| (code >= 97 && code <= 122)
+		|| code === 45 || code === 46 || code === 95;
+	    cleaned += allowed ? char : "_";
+	}
+	while (cleaned.startsWith("_")) {
+	    cleaned = cleaned.slice(1);
+	}
+	while (cleaned.endsWith("_")) {
+	    cleaned = cleaned.slice(0, -1);
+	}
+	return cleaned || "directory";
+    }
+
+    function mkdirTree(path) {
+	if (typeof FS.mkdirTree === "function") {
+	    FS.mkdirTree(path);
+	    return;
+	}
+	const parts = path.split("/").filter(Boolean);
+	let current = "";
+	for (const part of parts) {
+	    current += "/" + part;
+	    try {
+		FS.mkdir(current);
+	    } catch (error) {
+		if (!/File exists|EEXIST/.test(String(error && error.message))) {
+		    throw error;
+		}
+	    }
+	}
+    }
+
+    function virtualPath(name) {
+	const state = dialogState();
+	const id = state.nextId++;
+	return `/browser/directory/${id}-${sanitizeName(name)}`;
+    }
+
+    async function importFiles(rootPath, files) {
+	for (const file of files || []) {
+	    const relative = file.webkitRelativePath
+		? String(file.webkitRelativePath).split("/").slice(1).join("/")
+		: file.name;
+	    const safeParts = String(relative || file.name || "file")
+		.split("/")
+		.filter(Boolean)
+		.map(sanitizeName);
+	    if (safeParts.length === 0) {
+		continue;
+	    }
+	    const path = `${rootPath}/${safeParts.join("/")}`;
+	    const slash = path.lastIndexOf("/");
+	    if (slash > 0) {
+		mkdirTree(path.slice(0, slash));
+	    }
+	    FS.writeFile(path, new Uint8Array(await file.arrayBuffer()));
+	}
+    }
+
+    try {
+	let value = null;
+	if (typeof module.tkBrowserChooseDirectory === "function") {
+	    value = await module.tkBrowserChooseDirectory({
+		initialDir,
+		mustExist: !!mustExist,
+		title,
+	    });
+	    if (!value) {
+		return allocateString("");
+	    }
+	} else if (typeof globalThis.showDirectoryPicker === "function") {
+	    if (!hasUserActivation()) {
+		return unsupported();
+	    }
+	    try {
+		const handle = await globalThis.showDirectoryPicker();
+		const path = virtualPath(handle && handle.name ? handle.name : "directory");
+		mkdirTree(path);
+		dialogState().directoryHandles[path] = handle;
+		return allocateString(path);
+	    } catch (error) {
+		if (error && error.name === "AbortError") {
+		    return allocateString("");
+		}
+		return unsupported();
+	    }
+	} else if (typeof document !== "undefined") {
+	    if (!hasUserActivation()) {
+		return unsupported();
+	    }
+	    value = await new Promise((resolve) => {
+		const input = document.createElement("input");
+		let settled = false;
+		input.type = "file";
+		input.multiple = true;
+		input.webkitdirectory = true;
+		input.style.position = "fixed";
+		input.style.left = "-10000px";
+		input.style.top = "0";
+		input.addEventListener("change", () => {
+		    if (settled) {
+			return;
+		    }
+		    settled = true;
+		    const files = input.files ? Array.from(input.files) : [];
+		    input.remove();
+		    resolve(files.length ? { files, name: "directory" } : null);
+		}, { once: true });
+		input.addEventListener("cancel", () => {
+		    if (settled) {
+			return;
+		    }
+		    settled = true;
+		    input.remove();
+		    resolve(null);
+		}, { once: true });
+		document.body.appendChild(input);
+		input.click();
+	    });
+	    if (!value) {
+		return allocateString("");
+	    }
+	} else {
+	    return unsupported();
+	}
+	if (typeof value === "string") {
+	    mkdirTree(value);
+	    return allocateString(value);
+	}
+	const path = value.path ? String(value.path) : virtualPath(value.name || "directory");
+	mkdirTree(path);
+	if (value.handle) {
+	    dialogState().directoryHandles[path] = value.handle;
+	}
+	if (Array.isArray(value.files)) {
+	    await importFiles(path, value.files);
+	}
+	return allocateString(path);
+    } catch (error) {
+	return errorResult(error);
+    }
+});
+
+EM_ASYNC_JS(char *, BrowserChooseColor, (
+    const char *titlePtr,
+    const char *initialColorPtr), {
+    const title = UTF8ToString(titlePtr);
+    const initialColor = UTF8ToString(initialColorPtr);
+    const module = globalThis.Module || {};
+
+    function allocateString(text) {
+	const value = String(text || "");
+	const length = lengthBytesUTF8(value) + 1;
+	const pointer = _malloc(length);
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(value, pointer, length);
+	return pointer;
+    }
+
+    function unsupported() {
+	return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
+    }
+
+    function errorResult(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
+    }
+
+    function hasUserActivation() {
+	const activation = globalThis.navigator && globalThis.navigator.userActivation;
+	return !activation || !!activation.isActive;
+    }
+
+    try {
+	if (typeof module.tkBrowserChooseColor === "function") {
+	    const value = await module.tkBrowserChooseColor({
+		initialColor,
+		title,
+	    });
+	    return allocateString(value || "");
+	}
+	if (typeof document === "undefined") {
+	    return unsupported();
+	}
+	if (!hasUserActivation()) {
+	    return unsupported();
+	}
+	const value = await new Promise((resolve) => {
+	    const input = document.createElement("input");
+	    let settled = false;
+	    input.type = "color";
+	    input.value = /^#[0-9a-fA-F]{6}$/.test(initialColor)
+		? initialColor
+		: "#ffffff";
+	    input.style.position = "fixed";
+	    input.style.left = "-10000px";
+	    input.style.top = "0";
+	    function finish(value) {
+		if (settled) {
+		    return;
+		}
+		settled = true;
+		input.remove();
+		resolve(value || "");
+	    }
+	    input.addEventListener("change", () => finish(input.value), { once: true });
+	    input.addEventListener("cancel", () => finish(""), { once: true });
+	    document.body.appendChild(input);
+	    input.click();
+	});
+	return allocateString(value);
+    } catch (error) {
+	return errorResult(error);
+    }
+});
+
+EM_ASYNC_JS(char *, BrowserFlushSaveFileToBrowser, (
+    const char *pathPtr,
+    const char *namePtr), {
+    const path = UTF8ToString(pathPtr);
+    const name = UTF8ToString(namePtr);
+    const module = globalThis.Module || {};
+
+    function allocateString(text) {
+	const value = String(text || "");
+	const length = lengthBytesUTF8(value) + 1;
+	const pointer = _malloc(length);
+	if (!pointer) {
+	    return 0;
+	}
+	stringToUTF8(value, pointer, length);
+	return pointer;
+    }
+
+    function errorResult(error) {
+	const message = error instanceof Error ? error.message : String(error || "");
+	return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
+    }
+
+    try {
+	const data = FS.readFile(path);
+	const state = module.tkBrowserDialogState || {};
+	if (typeof module.tkBrowserFlushSaveFile === "function") {
+	    await module.tkBrowserFlushSaveFile({
+		bytes: data,
+		name,
+		path,
+		text: new TextDecoder().decode(data),
+	    });
+	    return allocateString("ok");
+	}
+	const handle = state.saveHandles && state.saveHandles[path];
+	if (handle && typeof handle.createWritable === "function") {
+	    const writable = await handle.createWritable();
+	    await writable.write(data);
+	    await writable.close();
+	    return allocateString("ok");
+	}
+	if (typeof document !== "undefined") {
+	    const blob = new Blob([data]);
+	    const url = URL.createObjectURL(blob);
+	    const anchor = document.createElement("a");
+	    anchor.href = url;
+	    anchor.download = name || path.split("/").pop() || "download";
+	    anchor.style.display = "none";
+	    document.body.appendChild(anchor);
+	    anchor.click();
+	    anchor.remove();
+	    URL.revokeObjectURL(url);
+	    return allocateString("ok");
+	}
+	return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
+    } catch (error) {
+	return errorResult(error);
+    }
+});
+
 static char *
 BrowserShowMessageBox(
     const char *title,
@@ -442,8 +1315,8 @@ BrowserUnsupportedMessageBoxType(
 {
     Tcl_SetObjResult(interp, Tcl_ObjPrintf(
 	    "browser native message box cannot represent -type %s", type));
-    Tcl_SetErrorCode(interp, "TK", "BROWSER",
-	    "UNSUPPORTED_MESSAGEBOX_TYPE", NULL);
+    Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_UNAVAILABLE",
+	    "MESSAGEBOX_TYPE", NULL);
     return TCL_ERROR;
 }
 
@@ -558,6 +1431,279 @@ BrowserMessageBoxCmd(
     Tcl_SetObjResult(interp, Tcl_NewStringObj(result, -1));
     free(result);
     return TCL_OK;
+}
+
+static int
+BrowserGetOpenFileCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    static const char *const options[] = {
+	"-defaultextension", "-filetypes", "-initialdir", "-initialfile",
+	"-multiple", "-parent", "-title", "-typevariable", NULL
+    };
+    const char *fileTypes = "";
+    const char *initialDir = "";
+    const char *initialFile = "";
+    const char *title = "";
+    int multiple = 0;
+    int i;
+    char *result;
+
+    (void)clientData;
+    if ((objc % 2) == 0) {
+	Tcl_WrongNumArgs(interp, 1, objv, "?option value ...?");
+	return TCL_ERROR;
+    }
+    for (i = 1; i < objc; i += 2) {
+	int optionIndex;
+
+	if (Tcl_GetIndexFromObj(interp, objv[i], options, "option", 0,
+		&optionIndex) != TCL_OK) {
+	    return TCL_ERROR;
+	}
+	switch (optionIndex) {
+	case 0:
+	    break;
+	case 1:
+	    fileTypes = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 2:
+	    initialDir = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 3:
+	    initialFile = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 4:
+	    if (Tcl_GetBooleanFromObj(interp, objv[i + 1], &multiple) != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 5:
+	    if (BrowserValidateParent(interp, Tcl_GetString(objv[i + 1]))
+		    != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 6:
+	    title = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 7:
+	    break;
+	}
+    }
+
+    result = BrowserChooseOpenFile(title, initialDir, initialFile, fileTypes,
+	    multiple);
+    return BrowserDialogPathListResult(interp, result, multiple);
+}
+
+static int
+BrowserGetSaveFileCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    static const char *const options[] = {
+	"-confirmoverwrite", "-defaultextension", "-filetypes", "-initialdir",
+	"-initialfile", "-parent", "-title", "-typevariable", NULL
+    };
+    const char *defaultExtension = "";
+    const char *fileTypes = "";
+    const char *initialDir = "";
+    const char *initialFile = "";
+    const char *title = "";
+    int i;
+    char *result;
+
+    (void)clientData;
+    if ((objc % 2) == 0) {
+	Tcl_WrongNumArgs(interp, 1, objv, "?option value ...?");
+	return TCL_ERROR;
+    }
+    for (i = 1; i < objc; i += 2) {
+	int optionIndex;
+
+	if (Tcl_GetIndexFromObj(interp, objv[i], options, "option", 0,
+		&optionIndex) != TCL_OK) {
+	    return TCL_ERROR;
+	}
+	switch (optionIndex) {
+	case 0: {
+	    int confirmOverwrite;
+
+	    if (Tcl_GetBooleanFromObj(interp, objv[i + 1],
+		    &confirmOverwrite) != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	}
+	case 1:
+	    defaultExtension = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 2:
+	    fileTypes = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 3:
+	    initialDir = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 4:
+	    initialFile = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 5:
+	    if (BrowserValidateParent(interp, Tcl_GetString(objv[i + 1]))
+		    != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 6:
+	    title = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 7:
+	    break;
+	}
+    }
+
+    result = BrowserChooseSaveFile(title, initialDir, initialFile,
+	    defaultExtension, fileTypes);
+    return BrowserDialogStringResult(interp, result);
+}
+
+static int
+BrowserChooseDirectoryCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    static const char *const options[] = {
+	"-initialdir", "-mustexist", "-parent", "-title", NULL
+    };
+    const char *initialDir = "";
+    const char *title = "";
+    int mustExist = 0;
+    int i;
+    char *result;
+
+    (void)clientData;
+    if ((objc % 2) == 0) {
+	Tcl_WrongNumArgs(interp, 1, objv, "?option value ...?");
+	return TCL_ERROR;
+    }
+    for (i = 1; i < objc; i += 2) {
+	int optionIndex;
+
+	if (Tcl_GetIndexFromObj(interp, objv[i], options, "option", 0,
+		&optionIndex) != TCL_OK) {
+	    return TCL_ERROR;
+	}
+	switch (optionIndex) {
+	case 0:
+	    initialDir = Tcl_GetString(objv[i + 1]);
+	    break;
+	case 1:
+	    if (Tcl_GetBooleanFromObj(interp, objv[i + 1], &mustExist)
+		    != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 2:
+	    if (BrowserValidateParent(interp, Tcl_GetString(objv[i + 1]))
+		    != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 3:
+	    title = Tcl_GetString(objv[i + 1]);
+	    break;
+	}
+    }
+
+    result = BrowserChooseDirectory(title, initialDir, mustExist);
+    return BrowserDialogStringResult(interp, result);
+}
+
+static int
+BrowserChooseColorCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    static const char *const options[] = {
+	"-initialcolor", "-parent", "-title", NULL
+    };
+    const char *initialColor = "";
+    const char *title = "";
+    int i;
+    char *result;
+
+    (void)clientData;
+    if ((objc % 2) == 0) {
+	Tcl_WrongNumArgs(interp, 1, objv, "?option value ...?");
+	return TCL_ERROR;
+    }
+    for (i = 1; i < objc; i += 2) {
+	int optionIndex;
+
+	if (Tcl_GetIndexFromObj(interp, objv[i], options, "option", 0,
+		&optionIndex) != TCL_OK) {
+	    return TCL_ERROR;
+	}
+	switch (optionIndex) {
+	case 0:
+	    initialColor = Tcl_GetString(objv[i + 1]);
+	    if (initialColor[0] != '\0') {
+		XColor *colorPtr = Tk_GetColor(interp, Tk_MainWindow(interp),
+			initialColor);
+
+		if (colorPtr == NULL) {
+		    return TCL_ERROR;
+		}
+		Tk_FreeColor(colorPtr);
+	    }
+	    break;
+	case 1:
+	    if (BrowserValidateParent(interp, Tcl_GetString(objv[i + 1]))
+		    != TCL_OK) {
+		return TCL_ERROR;
+	    }
+	    break;
+	case 2:
+	    title = Tcl_GetString(objv[i + 1]);
+	    break;
+	}
+    }
+
+    result = BrowserChooseColor(title, initialColor);
+    return BrowserDialogStringResult(interp, result);
+}
+
+static int
+BrowserFlushSaveFileCmd(
+    ClientData clientData,
+    Tcl_Interp *interp,
+    int objc,
+    Tcl_Obj *const objv[])
+{
+    const char *path;
+    const char *name = "";
+    char *result;
+
+    (void)clientData;
+    if ((objc < 2) || (objc > 3)) {
+	Tcl_WrongNumArgs(interp, 1, objv, "path ?name?");
+	return TCL_ERROR;
+    }
+    path = Tcl_GetString(objv[1]);
+    if (objc == 3) {
+	name = Tcl_GetString(objv[2]);
+    }
+    result = BrowserFlushSaveFileToBrowser(path, name);
+    return BrowserDialogStringResult(interp, result);
 }
 
 EMSCRIPTEN_KEEPALIVE int
@@ -851,6 +1997,16 @@ main(
 	    NULL, NULL);
     Tcl_CreateObjCommand(interp, "::browser::setResult", BrowserResultCmd,
 	    NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::chooseColor",
+	    BrowserChooseColorCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::chooseDirectory",
+	    BrowserChooseDirectoryCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::flushSaveFile",
+	    BrowserFlushSaveFileCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::getOpenFile",
+	    BrowserGetOpenFileCmd, NULL, NULL);
+    Tcl_CreateObjCommand(interp, "::browser::getSaveFile",
+	    BrowserGetSaveFileCmd, NULL, NULL);
     Tcl_CreateObjCommand(interp, "::browser::messageBox", BrowserMessageBoxCmd,
 	    NULL, NULL);
 
@@ -877,10 +2033,10 @@ main(
 	BrowserSetStatus("failed: shortcut bindings");
 	return 1;
     }
-    if (BrowserEval(interp, messageBoxScript,
-	    "browser message box bindings failed") != TCL_OK) {
+    if (BrowserEval(interp, nativeDialogScript,
+	    "browser native dialog bindings failed") != TCL_OK) {
 	BrowserSetResultObj(TCL_ERROR, Tcl_GetObjResult(interp));
-	BrowserSetStatus("failed: message box bindings");
+	BrowserSetStatus("failed: native dialog bindings");
 	return 1;
     }
 
