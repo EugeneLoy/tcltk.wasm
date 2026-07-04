@@ -1,0 +1,36 @@
+--- tkUnixFont.c
++++ tkUnixFont.c
+@@ -1315,6 +1315,32 @@ Tk_DrawChars(
+     lastSubFontPtr = &fontPtr->subFontArray[0];
+     xStart = x;
+-
++
++#ifdef TK_WASM_BROWSER
++    /*
++     * Browser canvas text can render UTF-8 runs directly. Keep the run intact
++     * so grapheme clusters and surrogate pairs are not split by X11 subfont
++     * fallback before they reach the DOM backend.
++     */
++    if (numBytes > 0) {
++	int width;
++
++	(void) Tk_MeasureChars(tkfont, source, numBytes, -1, 0, &width);
++	Xutf8DrawString(display, drawable, NULL, gc, x, y, source, numBytes);
++	x += width;
++	if (fontPtr->font.fa.underline != 0) {
++	    XFillRectangle(display, drawable, gc, xStart,
++		    y + fontPtr->underlinePos,
++		    (unsigned) (x - xStart), (unsigned) fontPtr->barHeight);
++	}
++	if (fontPtr->font.fa.overstrike != 0) {
++	    y -= fontPtr->font.fm.descent + (fontPtr->font.fm.ascent) / 10;
++	    XFillRectangle(display, drawable, gc, xStart, y,
++		    (unsigned) (x - xStart), (unsigned) fontPtr->barHeight);
++	}
++	return;
++    }
++#endif
++
+ #ifdef TK_DRAW_CHAR_XWINDOW_CHECK
+     /*
+      * Get the window width so we can abort drawing outside of the window

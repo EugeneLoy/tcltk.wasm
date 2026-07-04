@@ -39,7 +39,7 @@ rule overlay_tcl_unix
   restat = 1
 
 rule overlay_tk_unix
-  command = root=$$(pwd) && overlay="$$root/$tk_overlay_unix" && rm -rf "$$overlay" && mkdir -p "$$overlay" && for src in "$$root/$tk_src/unix"/*; do ln -s "$$src" "$$overlay/$${src##*/}"; done && for src in "$$root/browser/tk/unix"/*; do [ -e "$$src" ] || continue; dst="$$overlay/$${src##*/}" && rm -f "$$dst" && ln -s "$$src" "$$dst"; done && ln -sf "$$root/$tk_src/unix/tkUnixEvent.c" "$$overlay/tkUnixEventUpstream.c" && touch "$$root/$tk_overlay_unix_stamp"
+  command = root=$$(pwd) && overlay="$$root/$tk_overlay_unix" && rm -rf "$$overlay" && mkdir -p "$$overlay" && for src in "$$root/$tk_src/unix"/*; do ln -s "$$src" "$$overlay/$${src##*/}"; done && rm -f "$$overlay/tkUnixFont.c" && cp "$$root/$tk_src/unix/tkUnixFont.c" "$$overlay/tkUnixFont.c" && patch -d "$$overlay" -p0 < "$$root/browser/tk/patches/tkUnixFont.c.patch" && for src in "$$root/browser/tk/unix"/*; do [ -e "$$src" ] || continue; dst="$$overlay/$${src##*/}" && rm -f "$$dst" && ln -s "$$src" "$$dst"; done && ln -sf "$$root/$tk_src/unix/tkUnixEvent.c" "$$overlay/tkUnixEventUpstream.c" && touch "$$root/$tk_overlay_unix_stamp"
   description = overlay Tk unix backend
   restat = 1
 
@@ -84,7 +84,7 @@ build $tcl_overlay_unix_stamp: overlay_tcl_unix build.ninja browser/tcl/unix/tcl
 build $tcl_build/Makefile: configure_tcl build.ninja $configure_tools/uname
 build $tcl_build/.built: build_tcl $tcl_build/Makefile $tcl_overlay_unix_stamp
 
-build $tk_overlay_unix_stamp: overlay_tk_unix build.ninja browser/tk/unix/.gitkeep browser/tk/unix/tkUnixPort.h browser/tk/unix/tkBrowserXlibDecls.h browser/tk/unix/tkBrowserInt.h browser/tk/unix/tkUnixEvent.c browser/tk/unix/tkUnixXId.c third-party/tk/unix/tkUnixEvent.c
+build $tk_overlay_unix_stamp: overlay_tk_unix build.ninja browser/tk/unix/.gitkeep browser/tk/unix/tkUnixPort.h browser/tk/unix/tkBrowserXlibDecls.h browser/tk/unix/tkBrowserInt.h browser/tk/unix/tkUnixEvent.c browser/tk/unix/tkUnixXId.c browser/tk/patches/tkUnixFont.c.patch third-party/tk/unix/tkUnixEvent.c third-party/tk/unix/tkUnixFont.c
 build $tk_overlay_generic_stamp: overlay_tk_generic build.ninja browser/tk/generic/tkWindow.c third-party/tk/generic/tkWindow.c
 build $tk_build/Makefile: configure_tk $tcl_build/.built build.ninja $configure_tools/uname
 build $tk_build/.built: build_tk $tk_build/Makefile $tk_overlay_unix_stamp $tk_overlay_generic_stamp $x11_src/include/X11/Xlib.h $x11_src/include/X11/XlibWasm.h $x11_src/include/X11/Xutil.h $x11_src/include/X11/extensions/scrnsaver.h

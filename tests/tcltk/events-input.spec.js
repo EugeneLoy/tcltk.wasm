@@ -413,6 +413,64 @@ test("Tk entry caret stays after long digit text", async ({ page }) => {
   expect(sample.darkRightOfCaret).toBe(0);
 });
 
+test("Tk entry caret advance follows complex text measurement", async ({
+  page,
+}) => {
+  const script = [
+    "set font [font create -family Helvetica -size 24]",
+    "set cases [list \\",
+    "    [list flag {🇯🇵x}] \\",
+    "    [list combining {éx}] \\",
+    "    [list emoji {👩‍💻!}] \\",
+    "    [list rtl {שלום}] \\",
+    "    [list cjk {日本語}] \\",
+    "]",
+    "set values [list ready]",
+    "foreach case $cases {",
+    "    lassign $case name text",
+    "    catch {destroy .target}",
+    "    entry .target -width 32 -font $font -foreground black -background white -insertbackground red -insertwidth 3 -insertofftime 0 -insertontime 60000",
+    "    .target insert 0 $text",
+    "    pack .target -padx 20 -pady 20",
+    "    focus -force .target",
+    "    update",
+    "    .target icursor 0",
+    "    set x0 [lindex [.target bbox insert] 0]",
+    "    .target icursor end",
+    "    set endBox [.target bbox end]",
+    "    set x1 [expr {[lindex $endBox 0] + [lindex $endBox 2]}]",
+    "    set advance [expr {$x1 - $x0}]",
+    "    set expected [font measure $font $text]",
+    "    lappend values $name $advance $expected [expr {abs($advance - $expected) <= 1}]",
+    "}",
+    "join $values |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+
+  expect(result[0], `unexpected Tcl result: ${result.join("|")}`).toBe(
+    "ready",
+  );
+  for (let index = 1; index < result.length; index += 4) {
+    const [name, advance, expected, matches] = result.slice(index, index + 4);
+    expect(Number(advance), name).toBeGreaterThan(0);
+    expect(
+      Math.abs(Number(advance) - Number(expected)),
+      name,
+    ).toBeLessThanOrEqual(1);
+    expect(matches, name).toBe("1");
+  }
+});
+
 test("Tk key bindings receive control characters from XLookupString", async ({
   page,
 }) => {

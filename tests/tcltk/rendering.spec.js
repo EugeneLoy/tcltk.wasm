@@ -196,6 +196,51 @@ test("Tk font measures long digit runs as additive advances", async ({
   expect(result[3]).toBe("1");
 });
 
+test("Tk font measures complex text by grapheme advances", async ({ page }) => {
+  const script = [
+    "set font [font create -family Helvetica -size 24]",
+    "set cases [list \\",
+    "    [list flag {🇯🇵x} [list {🇯🇵} x]] \\",
+    "    [list combining {éx} [list {é} x]] \\",
+    "    [list emoji {👩‍💻!} [list {👩‍💻} !]] \\",
+    "    [list rtl {שלום} [list {ש} {ל} {ו} {ם}]] \\",
+    "    [list cjk {日本語} [list {日} {本} {語}]] \\",
+    "]",
+    "set values [list ready]",
+    "foreach case $cases {",
+    "    lassign $case name text segments",
+    "    set full [font measure $font $text]",
+    "    set sum 0",
+    "    foreach segment $segments {",
+    "        incr sum [font measure $font $segment]",
+    "    }",
+    "    lappend values $name $full $sum [expr {$full == $sum}]",
+    "}",
+    "join $values |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const result = (
+    (await page.locator("#tk-browser-result").textContent()) || ""
+  )
+    .trim()
+    .split("|");
+
+  expect(result[0], `unexpected Tcl result: ${result.join("|")}`).toBe(
+    "ready",
+  );
+  for (let index = 1; index < result.length; index += 4) {
+    const [name, full, sum, matches] = result.slice(index, index + 4);
+    expect(Number(full), name).toBeGreaterThan(0);
+    expect(full, name).toBe(sum);
+    expect(matches, name).toBe("1");
+  }
+});
+
 test("Tk font families expose browser fallback fonts", async ({ page }) => {
   const script = [
     "set families [font families]",
@@ -324,6 +369,128 @@ test("Tk canvas text honors requested font size", async ({ page }) => {
   expect(samples.small.count).toBeGreaterThan(10);
   expect(samples.large.count).toBeGreaterThan(samples.small.count * 2);
   expect(samples.large.height).toBeGreaterThan(samples.small.height * 1.6);
+});
+
+test("Tk canvas text draws complex grapheme clusters intact", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __tkCanvasFillTextCalls?: string[], __tkCanvasFillTextWrapped?: boolean }} */ (
+        window
+      );
+    target.__tkCanvasFillTextCalls = [];
+    if (target.__tkCanvasFillTextWrapped) {
+      return;
+    }
+    const patchFillText = (prototype) => {
+      if (!prototype?.fillText) {
+        return;
+      }
+      const originalFillText = prototype.fillText;
+      prototype.fillText = function (text, x, y, maxWidth) {
+        target.__tkCanvasFillTextCalls?.push(String(text));
+        if (arguments.length >= 4) {
+          return originalFillText.call(this, text, x, y, maxWidth);
+        }
+        return originalFillText.call(this, text, x, y);
+      };
+    };
+    patchFillText(CanvasRenderingContext2D.prototype);
+    patchFillText(
+      typeof OffscreenCanvasRenderingContext2D !== "undefined"
+        ? OffscreenCanvasRenderingContext2D.prototype
+        : null,
+    );
+    target.__tkCanvasFillTextWrapped = true;
+  });
+
+  const script = [
+    "pack [canvas .complex -width 340 -height 180 -background white]",
+    "set font {Helvetica 28}",
+    ".complex create text 8 30 -anchor w -text {🇯🇵x} -font $font -fill black",
+    ".complex create text 8 62 -anchor w -text {éx} -font $font -fill black",
+    ".complex create text 8 94 -anchor w -text {👩‍💻!} -font $font -fill black",
+    ".complex create text 8 126 -anchor w -text {שלום} -font $font -fill black",
+    ".complex create text 8 158 -anchor w -text {日本語} -font $font -fill black",
+    "update",
+    "list ready [winfo id .complex]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const canvasId = Number.parseInt(ready[1], 0);
+  expect(canvasId, `unexpected canvas id: ${ready[1]}`).toBeGreaterThan(0);
+
+  const drawn = await page
+    .locator(`[data-x11-wasm-xid="${canvasId}"] > canvas`)
+    .evaluate(async (canvas) => {
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("missing complex canvas element");
+      }
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      const backend =
+        /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot }, __tkCanvasFillTextCalls?: string[] }} */ (
+          window
+        ).Module?.x11WasmBackend;
+      backend?.flush();
+      const context = canvas.getContext("2d");
+      if (!context) {
+        throw new Error("missing complex canvas context");
+      }
+      const rowInk = (row) => {
+        const data = context.getImageData(0, row * 32, 320, 32).data;
+        let dark = 0;
+        for (let offset = 0; offset < data.length; offset += 4) {
+          if (
+            data[offset + 3] > 0 &&
+            data[offset] < 100 &&
+            data[offset + 1] < 100 &&
+            data[offset + 2] < 100
+          ) {
+            dark++;
+          }
+        }
+        return dark;
+      };
+      return {
+        calls:
+          /** @type {Window & { __tkCanvasFillTextCalls?: string[] }} */ (
+            window
+          ).__tkCanvasFillTextCalls || [],
+        ink: [0, 1, 2, 3, 4].map(rowInk),
+      };
+    });
+
+  for (const segment of [
+    "🇯🇵",
+    "é",
+    "👩‍💻",
+    "ש",
+    "ל",
+    "ו",
+    "ם",
+    "日",
+    "本",
+    "語",
+  ]) {
+    expect(drawn.calls, segment).toContain(segment);
+  }
+  for (const brokenSegment of ["🇯", "🇵", "👩", "💻"]) {
+    expect(drawn.calls, brokenSegment).not.toContain(brokenSegment);
+  }
+  for (const count of drawn.ink) {
+    expect(count).toBeGreaterThan(10);
+  }
 });
 
 test("Tk angled canvas text keeps its glyph clip mask", async ({ page }) => {
