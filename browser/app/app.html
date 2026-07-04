@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tcl/Tk WASM App</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #1f2328;
+      background: #f5f6f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: 44px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 16px;
+      border-bottom: 1px solid #d0d7de;
+      background: #ffffff;
+    }
+
+    header strong {
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    #tk-browser-status {
+      min-width: 92px;
+      color: #57606a;
+      font-size: 12px;
+      text-align: right;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(520px, 1fr);
+      gap: 12px;
+      min-height: 0;
+      padding: 12px;
+    }
+
+    section {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 38px;
+      padding: 0 12px;
+      border-bottom: 1px solid #d8dee4;
+      color: #24292f;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .shell-body {
+      display: grid;
+      grid-template-rows: minmax(180px, 1fr) auto auto;
+      min-height: 0;
+    }
+
+    #tcl-shell-output {
+      min-height: 0;
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      border: 0;
+      background: #0f1720;
+      color: #d8dee9;
+      font: 13px ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .command-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding: 10px;
+      border-top: 1px solid #d8dee4;
+      background: #f6f8fa;
+    }
+
+    #tcl-command {
+      width: 100%;
+      min-height: 112px;
+      resize: vertical;
+      padding: 9px 10px;
+      border: 1px solid #d0d7de;
+      border-radius: 6px;
+      color: #1f2328;
+      background: #ffffff;
+      font: 13px ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      line-height: 1.45;
+    }
+
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    button {
+      min-height: 32px;
+      padding: 0 11px;
+      border: 1px solid #afb8c1;
+      border-radius: 6px;
+      color: #24292f;
+      background: #f6f8fa;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: #1f6feb;
+      color: #ffffff;
+      background: #0969da;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .result-panel {
+      min-height: 84px;
+      border-top: 1px solid #d8dee4;
+      background: #ffffff;
+    }
+
+    .result-panel span {
+      display: block;
+      padding: 7px 10px 0;
+      color: #57606a;
+      font-size: 12px;
+    }
+
+    #tk-browser-result {
+      min-height: 50px;
+      max-height: 160px;
+      margin: 0;
+      padding: 7px 10px 10px;
+      overflow: auto;
+      color: #1f2328;
+      font: 13px ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .window-body {
+      position: relative;
+      min-height: 0;
+      padding: 10px;
+      background: #f6f8fa;
+    }
+
+    #tk-browser-root {
+      width: 100%;
+      height: 100%;
+      min-height: 560px;
+      overflow: hidden;
+      border: 1px solid #d0d7de;
+      background: #ffffff;
+    }
+
+    @media (max-width: 920px) {
+      body {
+        grid-template-rows: 44px auto;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      #tk-browser-root {
+        min-height: 480px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Tcl/Tk WASM</strong>
+    <span id="tk-browser-status">loading</span>
+  </header>
+  <main>
+    <section aria-label="Tcl Shell">
+      <div class="panel-title">Tcl Shell</div>
+      <div class="shell-body">
+        <pre id="tcl-shell-output"></pre>
+        <div class="command-row">
+          <textarea id="tcl-command" spellcheck="false" autocomplete="off">winfo children .
+wm title . {User Window}
+button .again -text {Created from shell} -command {browser::setResult {button clicked}}
+pack .again -padx 12 -pady 8
+update
+list ok [winfo children .]</textarea>
+          <div class="button-row">
+            <button id="tcl-run" class="primary" type="button" disabled>Run</button>
+            <button id="tcl-demo" type="button" disabled>Demo</button>
+            <button id="tcl-clear" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="result-panel" aria-label="Last Tcl result">
+          <span>Last Result</span>
+          <pre id="tk-browser-result" data-code=""></pre>
+        </div>
+      </div>
+    </section>
+    <section aria-label="User Window">
+      <div class="panel-title">User Window</div>
+      <div class="window-body">
+        <div id="tk-browser-root"></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    (function installTextDecoderResizableArrayBufferWorkaround() {
+      "use strict";
+
+      const NativeTextDecoder = globalThis.TextDecoder;
+      if (typeof NativeTextDecoder !== "function") {
+        return;
+      }
+
+      function copyBufferSource(input) {
+        if (ArrayBuffer.isView(input)) {
+          return Uint8Array.from(new Uint8Array(
+            input.buffer,
+            input.byteOffset,
+            input.byteLength
+          ));
+        }
+        if (input instanceof ArrayBuffer) {
+          return input.slice(0);
+        }
+        return input;
+      }
+
+      globalThis.TextDecoder = class TextDecoder extends NativeTextDecoder {
+        decode(input, options) {
+          try {
+            return super.decode(input, options);
+          } catch (error) {
+            if (!/resizable/i.test(String(error && error.message))) {
+              throw error;
+            }
+            return super.decode(copyBufferSource(input), options);
+          }
+        }
+      };
+    })();
+  </script>
+  <script>
+    (function configureTclTkApp() {
+      "use strict";
+
+      const encoder = new TextEncoder();
+      const statusElement = document.getElementById("tk-browser-status");
+      const resultElement = document.getElementById("tk-browser-result");
+      const outputElement = document.getElementById("tcl-shell-output");
+      const commandElement = document.getElementById("tcl-command");
+      const runButton = document.getElementById("tcl-run");
+      const demoButton = document.getElementById("tcl-demo");
+      const clearButton = document.getElementById("tcl-clear");
+      let runtimeReady = false;
+      let history = [];
+      let historyIndex = 0;
+
+      function setStatus(text) {
+        if (statusElement) {
+          statusElement.textContent = text;
+        }
+      }
+
+      function appendOutput(prefix, text) {
+        if (!outputElement) {
+          return;
+        }
+        const value = String(text || "");
+        outputElement.textContent += `${prefix}${value}\n`;
+        outputElement.scrollTop = outputElement.scrollHeight;
+      }
+
+      function setShellEnabled(enabled) {
+        runtimeReady = enabled;
+        if (runButton) {
+          runButton.disabled = !enabled;
+        }
+        if (demoButton) {
+          demoButton.disabled = !enabled;
+        }
+      }
+
+      function initialTkScript() {
+        return [
+          "wm title . {User Window - IME Sample}",
+          "catch {destroy .root}",
+          "namespace eval ::imeSample {}",
+          "proc ::imeSample::value {widget} {",
+          "    if {![winfo exists $widget]} {return {}}",
+          "    if {[winfo class $widget] eq {Text}} {return [$widget get 1.0 {end-1c}]}",
+          "    if {[catch {$widget get} value]} {return {}}",
+          "    return $value",
+          "}",
+          "proc ::imeSample::cursor {widget} {",
+          "    if {![winfo exists $widget]} {return {}}",
+          "    if {[winfo class $widget] eq {Text}} {return [$widget index insert]}",
+          "    if {[catch {$widget index insert} cursor]} {return {}}",
+          "    return $cursor",
+          "}",
+          "proc ::imeSample::record {event widget detail} {",
+          "    set value [::imeSample::value $widget]",
+          "    set cursor [::imeSample::cursor $widget]",
+          "    set summary [list $event $widget cursor $cursor detail $detail value $value]",
+          "    if {[winfo exists .root.status.value]} {.root.status.value configure -text $summary}",
+          "    browser::setResult $summary",
+          "}",
+          "proc ::imeSample::report {} {",
+          "    set values [list entry [.root.form.entry get] initial [.root.form.initial get] text [.root.form.text get 1.0 {end-1c}] spinbox [.root.form.spin get] password [.root.form.password get]]",
+          "    browser::setResult $values",
+          "    if {[winfo exists .root.status.value]} {.root.status.value configure -text $values}",
+          "}",
+          "proc ::imeSample::clear {} {",
+          "    foreach widget {.root.form.entry .root.form.initial .root.form.password} {$widget delete 0 end}",
+          "    .root.form.text delete 1.0 end",
+          "    .root.form.spin delete 0 end",
+          "    browser::setResult {cleared}",
+          "}",
+          "frame .root -background white -padx 16 -pady 16",
+          "label .root.title -text {Tcl/Tk WASM IME Sample} -font {Helvetica 18 bold} -background white",
+          "label .root.body -text {Focus each field and test composition, conversion, cursor movement, and commit behavior.} -background white -anchor w -justify left",
+          "frame .root.form -background white",
+          "label .root.form.entryLabel -text {Entry} -background white -anchor e",
+          "entry .root.form.entry -width 42",
+          "label .root.form.initialLabel -text {Entry with text} -background white -anchor e",
+          "entry .root.form.initial -width 42",
+          ".root.form.initial insert end {日本語の初期値 abc 123}",
+          "label .root.form.textLabel -text {Text} -background white -anchor ne",
+          "text .root.form.text -width 42 -height 5 -wrap char",
+          ".root.form.text insert 1.0 {ここで日本語 IME の変換、確定、改行、カーソル移動を試してください。}",
+          "label .root.form.spinLabel -text {Spinbox} -background white -anchor e",
+          "spinbox .root.form.spin -values {かな カナ 漢字 alphabet 12345} -width 40",
+          "label .root.form.passwordLabel -text {Password entry} -background white -anchor e",
+          "entry .root.form.password -show * -width 42",
+          "grid .root.form.entryLabel -row 0 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .root.form.entry -row 0 -column 1 -sticky ew -pady 4",
+          "grid .root.form.initialLabel -row 1 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .root.form.initial -row 1 -column 1 -sticky ew -pady 4",
+          "grid .root.form.textLabel -row 2 -column 0 -sticky ne -padx {0 8} -pady 4",
+          "grid .root.form.text -row 2 -column 1 -sticky nsew -pady 4",
+          "grid .root.form.spinLabel -row 3 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .root.form.spin -row 3 -column 1 -sticky ew -pady 4",
+          "grid .root.form.passwordLabel -row 4 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .root.form.password -row 4 -column 1 -sticky ew -pady 4",
+          "grid columnconfigure .root.form 1 -weight 1",
+          "grid rowconfigure .root.form 2 -weight 1",
+          "frame .root.buttons -background white",
+          "button .root.buttons.report -text {Report values} -command {::imeSample::report}",
+          "button .root.buttons.clear -text {Clear fields} -command {::imeSample::clear}",
+          "button .root.buttons.result -text {Set result} -command {browser::setResult {button clicked}}",
+          "pack .root.buttons.report .root.buttons.clear .root.buttons.result -side left -padx {0 8}",
+          "frame .root.status -background white",
+          "label .root.status.label -text {Last input event:} -background white -anchor w",
+          "label .root.status.value -text {none} -background white -anchor w -justify left -wraplength 520",
+          "pack .root.status.label -side top -anchor w",
+          "pack .root.status.value -side top -fill x -anchor w",
+          "foreach widget {.root.form.entry .root.form.initial .root.form.text .root.form.spin .root.form.password} {",
+          "    bind $widget <FocusIn> {::imeSample::record focus %W {}}",
+          "    bind $widget <KeyRelease> {::imeSample::record key %W {%A}}",
+          "}",
+          "bind all <<X11WasmCompositionStart>> {::imeSample::record composition-start %W {%d}}",
+          "bind all <<X11WasmCompositionUpdate>> {::imeSample::record composition-update %W {%d}}",
+          "bind all <<X11WasmCompositionEnd>> {::imeSample::record composition-end %W {%d}}",
+          "pack .root.title -side top -anchor w -pady {0 4}",
+          "pack .root.body -side top -fill x -anchor w -pady {0 10}",
+          "pack .root.form -side top -fill both -expand 1",
+          "pack .root.buttons -side top -fill x -pady {10 6}",
+          "pack .root.status -side top -fill x -pady {6 0}",
+          "pack .root -fill both -expand 1",
+          "focus -force .root.form.entry",
+          "update",
+          "list ready [winfo children .]"
+        ].join("\n");
+      }
+
+      function demoScript() {
+        return [
+          "catch {destroy .demo}",
+          "toplevel .demo",
+          "wm title .demo {Demo Window}",
+          "label .demo.label -text {Hello from Tcl shell} -padx 16 -pady 10",
+          "button .demo.close -text Close -command {destroy .demo}",
+          "pack .demo.label .demo.close -side top -fill x",
+          "update",
+          "list demo [winfo children .]"
+        ].join("\n");
+      }
+
+      function locationArgs() {
+        const params = new URLSearchParams(window.location.search);
+        return [...params.getAll("argv"), ...params.getAll("arg")];
+      }
+
+      function locationEvalScripts() {
+        const params = new URLSearchParams(window.location.search);
+        return params.getAll("eval");
+      }
+
+      function writeCString(text) {
+        const module = globalThis.Module || {};
+        const malloc = module._malloc;
+        const heap = globalThis.HEAPU8 || module.HEAPU8;
+        const bytes = encoder.encode(text);
+        const pointer = typeof malloc === "function"
+          ? malloc(bytes.length + 1)
+          : 0;
+
+        if (!pointer || !heap) {
+          throw new Error("wasm memory is not ready");
+        }
+        heap.set(bytes, pointer);
+        heap[pointer + bytes.length] = 0;
+        return pointer;
+      }
+
+      function evalTcl(script, echo) {
+        const module = globalThis.Module || {};
+        const evalFn = module._TkBrowserEval;
+        const free = module._free;
+        let pointer = 0;
+        let code = 1;
+
+        if (!runtimeReady || typeof evalFn !== "function") {
+          appendOutput("! ", "Tcl runtime is not ready");
+          return code;
+        }
+        if (echo) {
+          appendOutput("% ", script);
+        }
+        try {
+          pointer = writeCString(script);
+          code = evalFn(pointer);
+        } catch (error) {
+          appendOutput("! ", error instanceof Error ? error.message : String(error));
+          return 1;
+        } finally {
+          if (pointer && typeof free === "function") {
+            free(pointer);
+          }
+        }
+        appendOutput(code === 0 ? "= " : "! ",
+          module.tkBrowserEvalResult || (resultElement ? resultElement.textContent : ""));
+        return code;
+      }
+
+      function runCommand() {
+        if (!(commandElement instanceof HTMLTextAreaElement)) {
+          return;
+        }
+        const script = commandElement.value.trim();
+        if (!script) {
+          return;
+        }
+        history.push(script);
+        historyIndex = history.length;
+        evalTcl(script, true);
+      }
+
+      function setCommandFromHistory(delta) {
+        if (!(commandElement instanceof HTMLTextAreaElement) || history.length === 0) {
+          return;
+        }
+        historyIndex = Math.max(0, Math.min(history.length, historyIndex + delta));
+        commandElement.value = history[historyIndex] || "";
+      }
+
+      if (runButton) {
+        runButton.addEventListener("click", runCommand);
+      }
+      if (demoButton) {
+        demoButton.addEventListener("click", () => {
+          evalTcl(demoScript(), true);
+        });
+      }
+      if (clearButton && outputElement) {
+        clearButton.addEventListener("click", () => {
+          outputElement.textContent = "";
+        });
+      }
+      if (commandElement instanceof HTMLTextAreaElement) {
+        commandElement.addEventListener("keydown", (event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            runCommand();
+          } else if (event.altKey && event.key === "ArrowUp") {
+            event.preventDefault();
+            setCommandFromHistory(-1);
+          } else if (event.altKey && event.key === "ArrowDown") {
+            event.preventDefault();
+            setCommandFromHistory(1);
+          }
+        });
+      }
+
+      const module = globalThis.Module || {};
+      const evalScripts = locationEvalScripts();
+      const existingPostRun = module.postRun;
+      const postRun = Array.isArray(existingPostRun)
+        ? [...existingPostRun]
+        : existingPostRun
+          ? [existingPostRun]
+          : [];
+
+      module.x11WasmRoot = "#tk-browser-root";
+      module.locateFile = function locateFile(path) {
+        const name = String(path).split("/").pop();
+        return `/${name}`;
+      };
+      module.arguments = locationArgs();
+      module.tkBrowserEvalScripts = evalScripts.length > 0
+        ? evalScripts
+        : [initialTkScript()];
+      module.setStatus = setStatus;
+      module.print = function print(text) {
+        appendOutput("> ", text);
+      };
+      module.printErr = function printErr(text) {
+        appendOutput("! ", text);
+      };
+      postRun.push(() => {
+        setShellEnabled(true);
+        appendOutput("> ", "ready");
+        if (commandElement instanceof HTMLTextAreaElement) {
+          commandElement.focus();
+        }
+      });
+      module.postRun = postRun;
+      globalThis.Module = module;
+
+      window.addEventListener("error", (event) => {
+        setStatus("failed");
+        appendOutput("! ", event.message || "browser error");
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        setStatus("failed");
+        appendOutput("! ", event.reason instanceof Error
+          ? event.reason.message
+          : String(event.reason));
+      });
+      globalThis.tclTkBrowserEval = function tclTkBrowserEval(script) {
+        return evalTcl(String(script || ""), false);
+      };
+    })();
+  </script>
+  <script async src="/tcltk.js"></script>
+</body>
+</html>

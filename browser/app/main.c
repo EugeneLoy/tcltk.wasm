@@ -303,6 +303,31 @@ BrowserResultCmd(
     return TCL_OK;
 }
 
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserEval(
+    const char *script)
+{
+    int code;
+
+    if (browserInterp == NULL) {
+	BrowserSetResultBytes(TCL_ERROR, "Tcl interpreter is not ready", -1);
+	BrowserSetStatus("eval error");
+	return TCL_ERROR;
+    }
+    code = Tcl_EvalEx(browserInterp, (script != NULL) ? script : "", -1,
+	    TCL_EVAL_GLOBAL);
+    if (code != TCL_OK) {
+	BrowserConsole("error", "interactive eval failed");
+	BrowserConsole("error", Tcl_GetStringResult(browserInterp));
+    }
+    BrowserSetResultObj(code, Tcl_GetObjResult(browserInterp));
+    BrowserSetStatus((code == TCL_OK) ? "eval ok" : "eval error");
+    BrowserDrainQueuedControlEvents();
+    TkBrowserServiceXEvents();
+    BrowserDrainTclEvents();
+    return code;
+}
+
 static int
 BrowserUrlEvalScriptCount(void)
 {
