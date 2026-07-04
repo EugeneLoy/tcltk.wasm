@@ -204,6 +204,165 @@ test("Tk native file dialogs bridge through browser hooks", async ({ page }) => 
   ]);
 });
 
+test("Tk file dialog filetypes feed browser picker options", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __nativePickerOptions?: Record<string, unknown> }} */ (
+        window
+      );
+
+    target.__nativePickerOptions = {};
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showOpenFilePicker", {
+      configurable: true,
+      value: async (options) => {
+        target.__nativePickerOptions.open = options;
+        return [
+          {
+            name: "picked.md",
+            getFile: async () =>
+              new File(["picked text"], "picked.md", { type: "text/markdown" }),
+          },
+        ];
+      },
+    });
+    Object.defineProperty(window, "showSaveFilePicker", {
+      configurable: true,
+      value: async (options) => {
+        target.__nativePickerOptions.save = options;
+        return {
+          name: "note.txt",
+          createWritable: async () => ({
+            close: async () => {},
+            write: async () => {},
+          }),
+        };
+      },
+    });
+  });
+
+  const fileTypes = "{{Text {.txt .md}} {Images {*.png *.jpg}} {All *}}";
+  const script = [
+    `set openPath [::browser::getOpenFile -filetypes ${fileTypes}]`,
+    "set fh [open $openPath r]",
+    "set opened [read $fh]",
+    "close $fh",
+    `set savePath [::browser::getSaveFile -initialfile note -defaultextension .txt -filetypes ${fileTypes}]`,
+    "join [list ready $opened [file exists $savePath]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  expect((await page.locator("#tk-browser-result").textContent()) || "").toBe(
+    "ready|picked text|1",
+  );
+
+  const pickerOptions = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __nativePickerOptions?: Record<string, unknown> }} */ (
+        window
+      ).__nativePickerOptions || {}
+    );
+  });
+
+  expect(pickerOptions).toEqual({
+    open: {
+      multiple: false,
+      types: [
+        {
+          description: "Text",
+          accept: { "text/plain": [".txt", ".md"] },
+        },
+        {
+          description: "Images",
+          accept: { "image/*": [".png", ".jpg"] },
+        },
+      ],
+    },
+    save: {
+      suggestedName: "note.txt",
+      types: [
+        {
+          description: "Text",
+          accept: { "text/plain": [".txt", ".md"] },
+        },
+        {
+          description: "Images",
+          accept: { "image/*": [".png", ".jpg"] },
+        },
+      ],
+    },
+  });
+});
+
+test("Tk open dialog filetypes feed hidden input accept", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __hiddenInputs?: unknown[] }} */ (window);
+    const click = HTMLInputElement.prototype.click;
+
+    target.__hiddenInputs = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showOpenFilePicker", {
+      configurable: true,
+      value: undefined,
+    });
+    HTMLInputElement.prototype.click = function clickHiddenInput() {
+      target.__hiddenInputs?.push({
+        accept: this.accept,
+        multiple: this.multiple,
+        type: this.type,
+      });
+      this.dispatchEvent(new Event("cancel"));
+    };
+    window.addEventListener(
+      "pagehide",
+      () => {
+        HTMLInputElement.prototype.click = click;
+      },
+      { once: true },
+    );
+  });
+
+  const script = [
+    "set result [::browser::getOpenFile -multiple 1 -filetypes {{Text {.txt .md}} {Images {*.png}} {All *}}]",
+    "join [list ready $result] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  expect((await page.locator("#tk-browser-result").textContent()) || "").toBe(
+    "ready|",
+  );
+
+  const hiddenInputs = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __hiddenInputs?: unknown[] }} */ (window)
+        .__hiddenInputs || []
+    );
+  });
+
+  expect(hiddenInputs).toEqual([
+    {
+      accept: ".txt,.md,.png",
+      multiple: true,
+      type: "file",
+    },
+  ]);
+});
+
 test("Tk native file dialogs return empty strings on browser cancel", async ({
   page,
 }) => {

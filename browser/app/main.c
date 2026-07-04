@@ -534,6 +534,154 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 	return !activation || !!activation.isActive;
     }
 
+    function parseTclList(text) {
+	const values = [];
+	let token = "";
+	let started = false;
+	let braceDepth = 0;
+	let inQuote = false;
+	const source = String(text || "");
+	function finish() {
+	    if (started) {
+		values.push(token);
+		token = "";
+		started = false;
+	    }
+	}
+	for (let i = 0; i < source.length; i++) {
+	    const char = source[i];
+	    if (char.charCodeAt(0) === 92 && i + 1 < source.length) {
+		token += source[++i];
+		started = true;
+		continue;
+	    }
+	    if (!inQuote && char === "{") {
+		if (braceDepth > 0) {
+		    token += char;
+		}
+		braceDepth++;
+		started = true;
+		continue;
+	    }
+	    if (!inQuote && char === "}" && braceDepth > 0) {
+		braceDepth--;
+		if (braceDepth > 0) {
+		    token += char;
+		}
+		continue;
+	    }
+	    if (braceDepth === 0 && char === "\"") {
+		inQuote = !inQuote;
+		started = true;
+		continue;
+	    }
+	    if (braceDepth === 0 && !inQuote
+		    && (char === " " || char === "\t" || char === "\n"
+		    || char === "\r")) {
+		finish();
+		continue;
+	    }
+	    token += char;
+	    started = true;
+	}
+	finish();
+	return values;
+    }
+
+    function extensionFromPattern(pattern) {
+	let value = String(pattern || "");
+	if (!value || value === "*" || value === "*.*") {
+	    return "";
+	}
+	if (value.startsWith("*.")) {
+	    value = value.slice(1);
+	} else if (!value.startsWith(".")
+		&& value.indexOf("*") < 0 && value.indexOf("?") < 0
+		&& value.indexOf("/") < 0) {
+	    value = "." + value;
+	}
+	if (!value.startsWith(".") || value.length < 2) {
+	    return "";
+	}
+	let extension = ".";
+	for (let i = 1; i < value.length; i++) {
+	    const char = value[i];
+	    const code = char.charCodeAt(0);
+	    const allowed = (code >= 48 && code <= 57)
+		|| (code >= 65 && code <= 90)
+		|| (code >= 97 && code <= 122)
+		|| code === 45 || code === 95;
+	    if (!allowed) {
+		return "";
+	    }
+	    extension += char;
+	}
+	return extension;
+    }
+
+    function mimeForExtension(extension) {
+	const lower = extension.toLowerCase();
+	if (lower === ".png" || lower === ".gif" || lower === ".jpg"
+		|| lower === ".jpeg" || lower === ".webp" || lower === ".bmp") {
+	    return "image/*";
+	}
+	if (lower === ".svg") {
+	    return "image/svg+xml";
+	}
+	if (lower === ".json") {
+	    return "application/json";
+	}
+	if (lower === ".pdf") {
+	    return "application/pdf";
+	}
+	if (lower === ".txt" || lower === ".text" || lower === ".md"
+		|| lower === ".csv" || lower === ".tsv" || lower === ".tcl"
+		|| lower === ".html" || lower === ".css" || lower === ".js"
+		|| lower === ".xml") {
+	    return "text/plain";
+	}
+	return "application/octet-stream";
+    }
+
+    function browserFileTypes(tclFileTypes) {
+	const rows = parseTclList(tclFileTypes);
+	const types = [];
+	const allExtensions = [];
+	const seenAll = new Set();
+	for (const row of rows) {
+	    const parts = parseTclList(row);
+	    if (parts.length < 2) {
+		continue;
+	    }
+	    const description = parts[0] || "Files";
+	    const patterns = parseTclList(parts[1]);
+	    const accept = {};
+	    let count = 0;
+	    for (const pattern of patterns) {
+		const extension = extensionFromPattern(pattern);
+		if (!extension) {
+		    continue;
+		}
+		const lower = extension.toLowerCase();
+		if (seenAll.has(lower)) {
+		    continue;
+		}
+		seenAll.add(lower);
+		allExtensions.push(extension);
+		const mime = mimeForExtension(extension);
+		if (!accept[mime]) {
+		    accept[mime] = [];
+		}
+		accept[mime].push(extension);
+		count++;
+	    }
+	    if (count > 0) {
+		types.push({ description, accept });
+	    }
+	}
+	return { accept: allExtensions.join(","), types };
+    }
+
     function sanitizeName(name) {
 	let cleaned = "";
 	for (const char of String(name || "file")) {
@@ -645,14 +793,17 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 	const hooked = await hookFiles();
 	let entries = hooked;
 	if (entries === null) {
+	    const pickerTypes = browserFileTypes(fileTypes);
 	    if (!hasUserActivation()) {
 		return unsupported();
 	    }
 	    if (typeof globalThis.showOpenFilePicker === "function") {
 		try {
-		    const handles = await globalThis.showOpenFilePicker({
-			multiple: !!multiple,
-		    });
+		    const options = { multiple: !!multiple };
+		    if (pickerTypes.types.length > 0) {
+			options.types = pickerTypes.types;
+		    }
+		    const handles = await globalThis.showOpenFilePicker(options);
 		    entries = [];
 		    for (const handle of handles) {
 			entries.push(await handle.getFile());
@@ -669,6 +820,9 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 		    let settled = false;
 		    input.type = "file";
 		    input.multiple = !!multiple;
+		    if (pickerTypes.accept) {
+			input.accept = pickerTypes.accept;
+		    }
 		    input.style.position = "fixed";
 		    input.style.left = "-10000px";
 		    input.style.top = "0";
@@ -759,6 +913,154 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 	return !activation || !!activation.isActive;
     }
 
+    function parseTclList(text) {
+	const values = [];
+	let token = "";
+	let started = false;
+	let braceDepth = 0;
+	let inQuote = false;
+	const source = String(text || "");
+	function finish() {
+	    if (started) {
+		values.push(token);
+		token = "";
+		started = false;
+	    }
+	}
+	for (let i = 0; i < source.length; i++) {
+	    const char = source[i];
+	    if (char.charCodeAt(0) === 92 && i + 1 < source.length) {
+		token += source[++i];
+		started = true;
+		continue;
+	    }
+	    if (!inQuote && char === "{") {
+		if (braceDepth > 0) {
+		    token += char;
+		}
+		braceDepth++;
+		started = true;
+		continue;
+	    }
+	    if (!inQuote && char === "}" && braceDepth > 0) {
+		braceDepth--;
+		if (braceDepth > 0) {
+		    token += char;
+		}
+		continue;
+	    }
+	    if (braceDepth === 0 && char === "\"") {
+		inQuote = !inQuote;
+		started = true;
+		continue;
+	    }
+	    if (braceDepth === 0 && !inQuote
+		    && (char === " " || char === "\t" || char === "\n"
+		    || char === "\r")) {
+		finish();
+		continue;
+	    }
+	    token += char;
+	    started = true;
+	}
+	finish();
+	return values;
+    }
+
+    function extensionFromPattern(pattern) {
+	let value = String(pattern || "");
+	if (!value || value === "*" || value === "*.*") {
+	    return "";
+	}
+	if (value.startsWith("*.")) {
+	    value = value.slice(1);
+	} else if (!value.startsWith(".")
+		&& value.indexOf("*") < 0 && value.indexOf("?") < 0
+		&& value.indexOf("/") < 0) {
+	    value = "." + value;
+	}
+	if (!value.startsWith(".") || value.length < 2) {
+	    return "";
+	}
+	let extension = ".";
+	for (let i = 1; i < value.length; i++) {
+	    const char = value[i];
+	    const code = char.charCodeAt(0);
+	    const allowed = (code >= 48 && code <= 57)
+		|| (code >= 65 && code <= 90)
+		|| (code >= 97 && code <= 122)
+		|| code === 45 || code === 95;
+	    if (!allowed) {
+		return "";
+	    }
+	    extension += char;
+	}
+	return extension;
+    }
+
+    function mimeForExtension(extension) {
+	const lower = extension.toLowerCase();
+	if (lower === ".png" || lower === ".gif" || lower === ".jpg"
+		|| lower === ".jpeg" || lower === ".webp" || lower === ".bmp") {
+	    return "image/*";
+	}
+	if (lower === ".svg") {
+	    return "image/svg+xml";
+	}
+	if (lower === ".json") {
+	    return "application/json";
+	}
+	if (lower === ".pdf") {
+	    return "application/pdf";
+	}
+	if (lower === ".txt" || lower === ".text" || lower === ".md"
+		|| lower === ".csv" || lower === ".tsv" || lower === ".tcl"
+		|| lower === ".html" || lower === ".css" || lower === ".js"
+		|| lower === ".xml") {
+	    return "text/plain";
+	}
+	return "application/octet-stream";
+    }
+
+    function browserFileTypes(tclFileTypes) {
+	const rows = parseTclList(tclFileTypes);
+	const types = [];
+	const allExtensions = [];
+	const seenAll = new Set();
+	for (const row of rows) {
+	    const parts = parseTclList(row);
+	    if (parts.length < 2) {
+		continue;
+	    }
+	    const description = parts[0] || "Files";
+	    const patterns = parseTclList(parts[1]);
+	    const accept = {};
+	    let count = 0;
+	    for (const pattern of patterns) {
+		const extension = extensionFromPattern(pattern);
+		if (!extension) {
+		    continue;
+		}
+		const lower = extension.toLowerCase();
+		if (seenAll.has(lower)) {
+		    continue;
+		}
+		seenAll.add(lower);
+		allExtensions.push(extension);
+		const mime = mimeForExtension(extension);
+		if (!accept[mime]) {
+		    accept[mime] = [];
+		}
+		accept[mime].push(extension);
+		count++;
+	    }
+	    if (count > 0) {
+		types.push({ description, accept });
+	    }
+	}
+	return { accept: allExtensions.join(","), types };
+    }
+
     function sanitizeName(name) {
 	let cleaned = "";
 	for (const char of String(name || "untitled")) {
@@ -831,9 +1133,12 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 		return unsupported();
 	    }
 	    try {
-		const handle = await globalThis.showSaveFilePicker({
-		    suggestedName: suggestedName(),
-		});
+		const options = { suggestedName: suggestedName() };
+		const pickerTypes = browserFileTypes(fileTypes);
+		if (pickerTypes.types.length > 0) {
+		    options.types = pickerTypes.types;
+		}
+		const handle = await globalThis.showSaveFilePicker(options);
 		const path = virtualPath(handle && handle.name ? handle.name : suggestedName());
 		const slash = path.lastIndexOf("/");
 		if (slash > 0) {
