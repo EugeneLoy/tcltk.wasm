@@ -86,7 +86,9 @@ static const char *nativeDialogScript =
     "    if {[dict exists $options -errorcode]\n"
     "            && [lrange [dict get $options -errorcode] 0 2] eq {TK BROWSER DIALOG_UNAVAILABLE}\n"
     "            && [llength [info commands $fallback]]} {\n"
-    "        return [{*}$fallback {*}$args]\n"
+    "        set fallbackCode [catch {{*}$fallback {*}$args} fallbackResult fallbackOptions]\n"
+    "        if {$fallbackCode == 0} {return $fallbackResult}\n"
+    "        if {$fallbackCode != 1} {return -options $fallbackOptions $fallbackResult}\n"
     "    }\n"
     "    return -options $options $result\n"
     "}\n"
@@ -323,6 +325,20 @@ BrowserDrainQueuedControlEvents(void)
 	    | TCL_IDLE_EVENTS)) {
 	events++;
 	if (events > 100) {
+	    break;
+	}
+    }
+    return events;
+}
+
+static int
+BrowserDrainWindowEvents(void)
+{
+    int events = 0;
+
+    while (Tcl_ServiceEvent(TCL_WINDOW_EVENTS)) {
+	events++;
+	if (events > 1000) {
 	    break;
 	}
     }
@@ -1115,6 +1131,16 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 	return `/browser/save/${id}-${sanitizeName(name)}`;
     }
 
+    function createFallbackSavePath(name) {
+	const path = virtualPath(name);
+	const slash = path.lastIndexOf("/");
+	if (slash > 0) {
+	    mkdirTree(path.slice(0, slash));
+	}
+	FS.writeFile(path, new Uint8Array());
+	return path;
+    }
+
     try {
 	let value = null;
 	if (typeof module.tkBrowserSaveFile === "function") {
@@ -1153,6 +1179,11 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 		}
 		return unsupported();
 	    }
+	} else if (typeof document !== "undefined") {
+	    if (!hasUserActivation()) {
+		return unsupported();
+	    }
+	    return allocateString(createFallbackSavePath(suggestedName()));
 	} else {
 	    return unsupported();
 	}
@@ -1536,50 +1567,90 @@ BrowserShowMessageBox(
 	const module = globalThis.Module || {};
 	let result = "";
 
-	if (typeof module.tkBrowserMessageBox === "function") {
-	    result = module.tkBrowserMessageBox({
-		defaultButton,
-		detail,
-		icon,
-		message,
-		title,
-		type,
-	    });
-	} else {
-	    let text = "";
+	function allocateString(text) {
+	    const value = String(text || "");
+	    const length = lengthBytesUTF8(value) + 1;
+	    const pointer = _malloc(length);
 
-	    if (title) {
-		text += title;
+	    if (!pointer) {
+		return 0;
 	    }
-	    if (message) {
-		text += (text ? "\n\n" : "") + message;
-	    }
-	    if (detail) {
-		text += (text ? "\n\n" : "") + detail;
-	    }
+	    stringToUTF8(value, pointer, length);
+	    return pointer;
+	}
 
-	    if (type === "ok") {
-		globalThis.alert(text);
-		result = "ok";
-	    } else if (type === "okcancel") {
-		result = globalThis.confirm(text) ? "ok" : "cancel";
-	    } else if (type === "retrycancel") {
-		result = globalThis.confirm(text) ? "retry" : "cancel";
-	    } else if (type === "yesno") {
-		result = globalThis.confirm(text) ? "yes" : "no";
-	    }
+	function unsupported() {
+	    return allocateString("__TK_BROWSER_DIALOG_UNSUPPORTED__");
 	}
-	if (typeof result !== "string") {
-	    result = "";
-	}
-	const length = lengthBytesUTF8(result) + 1;
-	const pointer = _malloc(length);
 
-	if (!pointer) {
-	    return 0;
+	function errorResult(error) {
+	    const message = error instanceof Error ? error.message : String(error || "");
+	    return allocateString("__TK_BROWSER_DIALOG_ERROR__:" + message);
 	}
-	stringToUTF8(result, pointer, length);
-	return pointer;
+
+	function hasUserActivation() {
+	    const activation = globalThis.navigator && globalThis.navigator.userActivation;
+	    return !activation || !!activation.isActive;
+	}
+
+	try {
+	    if (typeof module.tkBrowserMessageBox === "function") {
+		result = module.tkBrowserMessageBox({
+		    defaultButton,
+		    detail,
+		    icon,
+		    message,
+		    title,
+		    type,
+		});
+	    } else {
+		let text = "";
+
+		if (title) {
+		    text += title;
+		}
+		if (message) {
+		    text += (text ? "\n\n" : "") + message;
+		}
+		if (detail) {
+		    text += (text ? "\n\n" : "") + detail;
+		}
+
+		if (!hasUserActivation()) {
+		    return unsupported();
+		}
+		if (type === "ok") {
+		    if (typeof globalThis.alert !== "function") {
+			return unsupported();
+		    }
+		    globalThis.alert(text);
+		    result = "ok";
+		} else if (type === "okcancel") {
+		    if (typeof globalThis.confirm !== "function") {
+			return unsupported();
+		    }
+		    result = globalThis.confirm(text) ? "ok" : "cancel";
+		} else if (type === "retrycancel") {
+		    if (typeof globalThis.confirm !== "function") {
+			return unsupported();
+		    }
+		    result = globalThis.confirm(text) ? "retry" : "cancel";
+		} else if (type === "yesno") {
+		    if (typeof globalThis.confirm !== "function") {
+			return unsupported();
+		    }
+		    result = globalThis.confirm(text) ? "yes" : "no";
+		} else {
+		    return unsupported();
+		}
+	    }
+	    if (typeof result !== "string") {
+		result = "";
+	    }
+	    return allocateString(result);
+	} catch (error) {
+	    return errorResult(error);
+	}
     }, title, message, detail, icon, type, defaultButton);
 }
 
@@ -1651,6 +1722,7 @@ BrowserMessageBoxCmd(
     int typeIndex = 1;
     int i;
     char *result;
+    size_t errorPrefixLength = strlen(BROWSER_DIALOG_ERROR_PREFIX);
 
     (void)clientData;
     if ((objc % 2) == 0) {
@@ -1725,6 +1797,18 @@ BrowserMessageBoxCmd(
     if (result == NULL) {
 	Tcl_SetObjResult(interp, Tcl_NewStringObj(
 		"failed to allocate browser message box result", -1));
+	return TCL_ERROR;
+    }
+    if (strcmp(result, BROWSER_DIALOG_UNSUPPORTED) == 0) {
+	free(result);
+	return BrowserDialogUnavailable(interp,
+		"browser native message box is not available");
+    }
+    if (strncmp(result, BROWSER_DIALOG_ERROR_PREFIX, errorPrefixLength) == 0) {
+	Tcl_SetObjResult(interp, Tcl_NewStringObj(
+		result + errorPrefixLength, -1));
+	free(result);
+	Tcl_SetErrorCode(interp, "TK", "BROWSER", "DIALOG_ERROR", NULL);
 	return TCL_ERROR;
     }
     if (!BrowserMessageBoxResultAllowed(typeIndex, result)) {
@@ -2273,6 +2357,19 @@ BrowserEventLoop(
     TkBrowserServiceXEvents();
     BrowserDrainTclEvents();
     (void)interp;
+}
+
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserServiceUserActivationEvents(void)
+{
+    int events = 0;
+
+    if (browserInterp == NULL) {
+	return 0;
+    }
+    events += TkBrowserServiceXEvents();
+    events += BrowserDrainWindowEvents();
+    return events;
 }
 
 int

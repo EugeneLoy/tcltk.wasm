@@ -144,6 +144,12 @@
     if (!Object.prototype.hasOwnProperty.call(Module, "tkBrowserEvalScripts")) {
       Module.tkBrowserEvalScripts = tkBrowserEvalScriptsFromLocation();
     }
+    if (!Object.prototype.hasOwnProperty.call(Module, "x11WasmServiceUserActivationEvents")) {
+      Module.x11WasmServiceUserActivationEvents = function() {
+        const service = Module._TkBrowserServiceUserActivationEvents;
+        return typeof service === "function" ? service() : 0;
+      };
+    }
     if (!Object.prototype.hasOwnProperty.call(Module, "print")) {
       Module.print = function(text) {
         console.log(text);

@@ -2,6 +2,66 @@
 
 const { test, expect } = require("@playwright/test");
 
+async function installActivationProbe(page) {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & {
+       *   __activationProbe?: {
+       *     active: boolean,
+       *     alerts: Array<{ text: string, active: boolean }>,
+       *     inputClicks: Array<{ type: string, active: boolean }>
+       *   }
+       * }} */ (window);
+    const probe = {
+      active: false,
+      alerts: [],
+      inputClicks: [],
+    };
+    const armActivation = () => {
+      probe.active = true;
+      setTimeout(() => {
+        probe.active = false;
+      }, 0);
+    };
+    const originalInputClick = HTMLInputElement.prototype.click;
+
+    target.__activationProbe = probe;
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: {
+        get isActive() {
+          return probe.active;
+        },
+      },
+    });
+    Object.defineProperty(window, "showOpenFilePicker", {
+      configurable: true,
+      value: undefined,
+    });
+    document.addEventListener("pointerdown", armActivation, true);
+    document.addEventListener("pointerup", armActivation, true);
+    document.addEventListener("keydown", armActivation, true);
+    document.addEventListener("keyup", armActivation, true);
+    window.alert = (text) => {
+      probe.alerts.push({
+        active: window.navigator.userActivation.isActive,
+        text: String(text || ""),
+      });
+    };
+    HTMLInputElement.prototype.click = function click() {
+      probe.inputClicks.push({
+        active: window.navigator.userActivation.isActive,
+        type: this.type,
+      });
+      if (this.type === "file") {
+        this.dispatchEvent(new Event("cancel"));
+        return;
+      }
+      return originalInputClick.call(this);
+    };
+  });
+}
+
 test("Tk messageBox uses the synchronous browser native hook", async ({
   page,
 }) => {
@@ -57,6 +117,263 @@ test("Tk messageBox uses the synchronous browser native hook", async ({
       title: "",
       type: "yesno",
     },
+  ]);
+});
+
+test("Tk button messageBox keeps the pointer user activation", async ({
+  page,
+}) => {
+  await installActivationProbe(page);
+
+  const script = [
+    "button .message -text Message -command {set result [::browser::messageBox -type ok -message {Click alert}]; browser::setResult [list message $result]}",
+    "pack .message -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .message]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  const buttonId = Number.parseInt(ready[1], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText("message ok");
+
+  const alerts = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __activationProbe?: { alerts: unknown[] } }} */ (
+        window
+      ).__activationProbe?.alerts || []
+    );
+  });
+  expect(alerts).toEqual([
+    expect.objectContaining({
+      active: true,
+      text: "Click alert",
+    }),
+  ]);
+});
+
+test("Tk button messageBox observes native pointer user activation", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & {
+       *   __nativeActivationLog?: Array<{ event: string, active: boolean }>
+       * }} */ (window);
+    const active = () => {
+      const activation = window.navigator && window.navigator.userActivation;
+      return !activation || !!activation.isActive;
+    };
+
+    target.__nativeActivationLog = [];
+    document.addEventListener(
+      "pointerdown",
+      () => target.__nativeActivationLog?.push({ event: "down", active: active() }),
+      true,
+    );
+    document.addEventListener(
+      "pointerup",
+      () => target.__nativeActivationLog?.push({ event: "up", active: active() }),
+      true,
+    );
+    window.alert = () => {
+      target.__nativeActivationLog?.push({ event: "alert", active: active() });
+    };
+  });
+
+  const script = [
+    "button .message -text Message -command {set result [::browser::messageBox -type ok -message {Native activation alert}]; browser::setResult [list message $result]}",
+    "pack .message -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .message]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  const buttonId = Number.parseInt(ready[1], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText("message ok");
+
+  const log = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __nativeActivationLog?: unknown[] }} */ (window)
+        .__nativeActivationLog || []
+    );
+  });
+  expect(log).toEqual([
+    expect.objectContaining({ event: "down", active: true }),
+    expect.objectContaining({ event: "up", active: true }),
+    expect.objectContaining({ event: "alert", active: true }),
+  ]);
+});
+
+test("Tk button messageBox restores browser input focus after alert blur", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __alertBlurCount?: number }} */ (window);
+
+    target.__alertBlurCount = 0;
+    window.alert = () => {
+      const input = document.querySelector(".x11-wasm-input");
+      if (input instanceof HTMLElement) {
+        input.blur();
+        target.__alertBlurCount = (target.__alertBlurCount || 0) + 1;
+      }
+    };
+  });
+
+  const script = [
+    "entry .target",
+    "button .message -text Message -command {set result [::browser::messageBox -type ok -message {Focus alert}]; browser::setResult [list message $result]}",
+    "pack .target .message -padx 20 -pady 4",
+    "bind all <KeyPress> {browser::setStatus [list key %W %K %A [focus]]}",
+    "focus -force .target",
+    "update",
+    "list ready [winfo id .target] [winfo id .message] [focus]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  expect(ready[3], `expected focus on entry: ${ready.join(" ")}`).toBe(
+    ".target",
+  );
+  const entryId = Number.parseInt(ready[1], 0);
+  const buttonId = Number.parseInt(ready[2], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText("message ok");
+
+  const focusState = await page.evaluate((expectedEntryId) => {
+    const input = document.querySelector(".x11-wasm-input");
+    const focusedWindow = Number.parseInt(
+      input?.getAttribute("data-x11-wasm-focus-window") || "0",
+      0,
+    );
+    return {
+      alertBlurCount:
+        /** @type {Window & { __alertBlurCount?: number }} */ (window)
+          .__alertBlurCount || 0,
+      activeInput: document.activeElement === input,
+      focusedWindow,
+      expectedEntryId,
+    };
+  }, entryId);
+  expect(focusState).toEqual({
+    activeInput: true,
+    alertBlurCount: 1,
+    expectedEntryId: entryId,
+    focusedWindow: expect.any(Number),
+  });
+  expect(focusState.focusedWindow).toBeGreaterThan(0);
+
+  await page.keyboard.type("z");
+  await expect(page.locator("#tk-browser-status")).toHaveText(/key .* z z .*/);
+});
+
+test("Tk button messageBox keeps activation behind pending Tcl timers", async ({
+  page,
+}) => {
+  await installActivationProbe(page);
+
+  const script = [
+    "set ::timerCount 0",
+    "proc ::recordTimer {} {incr ::timerCount}",
+    "button .message -text Message -command {set result [::browser::messageBox -type ok -message {Timer-delayed alert}]; browser::setResult [list message $result $::timerCount]}",
+    "bind .message <ButtonPress-1> {for {set i 0} {$i < 400} {incr i} {after 0 ::recordTimer}}",
+    "pack .message -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .message]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  const buttonId = Number.parseInt(ready[1], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText(/message ok \d+/);
+
+  const alerts = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __activationProbe?: { alerts: unknown[] } }} */ (
+        window
+      ).__activationProbe?.alerts || []
+    );
+  });
+  expect(alerts).toEqual([
+    expect.objectContaining({
+      active: true,
+      text: "Timer-delayed alert",
+    }),
+  ]);
+});
+
+test("Tk button open dialog clicks hidden file input during activation", async ({
+  page,
+}) => {
+  await installActivationProbe(page);
+
+  const script = [
+    "button .open -text Open -command {set code [catch {::browser::getOpenFile -title {Open title}} result options]; set error {}; if {$code != 0 && [dict exists $options -errorcode]} {set error [dict get $options -errorcode]}; browser::setResult [join [list open $code $result $error] |]}",
+    "pack .open -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .open]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  const buttonId = Number.parseInt(ready[1], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText("open|0||");
+
+  const inputClicks = await page.evaluate(() => {
+    return (
+      /** @type {Window & { __activationProbe?: { inputClicks: unknown[] } }} */ (
+        window
+      ).__activationProbe?.inputClicks || []
+    );
+  });
+  expect(inputClicks).toEqual([
+    expect.objectContaining({
+      active: true,
+      type: "file",
+    }),
   ]);
 });
 
@@ -677,6 +994,143 @@ test("browser save flush falls back to Blob download", async ({ page }) => {
   });
 });
 
+test("Tk save dialog falls back to Blob download path without picker API", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const target =
+      /** @type {Window & { __downloads?: unknown[], __downloadText?: Promise<string> }} */ (
+        window
+      );
+    const click = HTMLAnchorElement.prototype.click;
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+
+    target.__downloads = [];
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: true },
+    });
+    Object.defineProperty(window, "showSaveFilePicker", {
+      configurable: true,
+      value: undefined,
+    });
+    URL.createObjectURL = (blob) => {
+      target.__downloadText = blob.text();
+      return "blob:tk-browser-save-fallback";
+    };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function clickDownload() {
+      target.__downloads?.push({
+        download: this.download,
+        href: this.href,
+      });
+    };
+    window.addEventListener(
+      "pagehide",
+      () => {
+        HTMLAnchorElement.prototype.click = click;
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+      },
+      { once: true },
+    );
+  });
+
+  const script = [
+    "button .save -text Save -command {",
+    "    set code [catch {",
+    "        set savePath [tk_getSaveFile -initialfile firefox-save -defaultextension .txt]",
+    "        set fh [open $savePath w]",
+    "        puts -nonewline $fh {fallback save text}",
+    "        close $fh",
+    "        ::browser::flushSaveFile $savePath exported-fallback.txt",
+    "        list ok [file exists $savePath] $savePath",
+    "    } result options]",
+    "    if {$code == 0} {",
+    "        browser::setResult [join $result |]",
+    "    } else {",
+    "        set error {}",
+    "        if {[dict exists $options -errorcode]} {set error [dict get $options -errorcode]}",
+    "        browser::setResult [join [list error $result $error] |]",
+    "    }",
+    "}",
+    "pack .save -padx 20 -pady 20",
+    "update",
+    "list ready [winfo id .save]",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split(/\s+/);
+  expect(ready[0], `unexpected Tcl result: ${ready.join(" ")}`).toBe("ready");
+  const buttonId = Number.parseInt(ready[1], 0);
+
+  await page.locator(`[data-x11-wasm-xid="${buttonId}"]`).click();
+  await expect(page.locator("#tk-browser-result")).toHaveText(/^ok\|1\|/);
+
+  const result = ((await page.locator("#tk-browser-result").textContent()) || "")
+    .trim()
+    .split("|");
+  expect(result[0]).toBe("ok");
+  expect(result[1]).toBe("1");
+  expect(result[2]).toMatch(/^\/browser\/save\/[0-9]+-firefox-save\.txt$/);
+
+  const download = await page.evaluate(async () => {
+    const target =
+      /** @type {Window & { __downloads?: unknown[], __downloadText?: Promise<string> }} */ (
+        window
+      );
+    return {
+      downloads: target.__downloads || [],
+      text: await target.__downloadText,
+    };
+  });
+  expect(download).toEqual({
+    downloads: [
+      {
+        download: "exported-fallback.txt",
+        href: "blob:tk-browser-save-fallback",
+      },
+    ],
+    text: "fallback save text",
+  });
+});
+
+test("Tk native dialog wrappers preserve unavailable errors when Tk fallback cannot wait", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: false },
+    });
+    Object.defineProperty(window, "showSaveFilePicker", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+
+  const script = [
+    "set code [catch {tk_getSaveFile -initialfile no-activation} result options]",
+    "join [list ready $code $result [dict get $options -errorcode]] |",
+  ].join("\n");
+  const query = new URLSearchParams({ eval: script }).toString();
+
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+
+  expect(((await page.locator("#tk-browser-result").textContent()) || "").trim())
+    .toBe("ready|1|browser native dialog is not available|TK BROWSER DIALOG_UNAVAILABLE");
+});
+
 test("Tk native file dialogs return empty strings on browser cancel", async ({
   page,
 }) => {
@@ -723,8 +1177,8 @@ test("browser native dialogs report unavailable without user activation", async 
 
   const script = [
     "set values [list ready]",
-    "foreach command {::browser::getOpenFile ::browser::getSaveFile ::browser::chooseDirectory ::browser::chooseColor} {",
-    "    set code [catch {$command} result options]",
+    "foreach command [list {::browser::getOpenFile} {::browser::getSaveFile} {::browser::chooseDirectory} {::browser::chooseColor} {::browser::messageBox -message Test}] {",
+    "    set code [catch {uplevel #0 $command} result options]",
     "    lappend values $code [dict get $options -errorcode]",
     "}",
     "join $values |",
@@ -742,6 +1196,8 @@ test("browser native dialogs report unavailable without user activation", async 
 
   expect(result).toEqual([
     "ready",
+    "1",
+    "TK BROWSER DIALOG_UNAVAILABLE",
     "1",
     "TK BROWSER DIALOG_UNAVAILABLE",
     "1",
