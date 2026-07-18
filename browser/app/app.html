@@ -742,7 +742,7 @@ list ok [winfo children .]</textarea>
       };
       module.locateFile = function locateFile(path) {
         const name = String(path).split("/").pop();
-        return `/${name}`;
+        return new URL(name, document.baseURI).href;
       };
       module.arguments = locationArgs();
       module.tkBrowserEvalScripts = evalScripts.length > 0
@@ -780,6 +780,6 @@ list ok [winfo children .]</textarea>
       };
     })();
   </script>
-  <script async src="/tcltk.js"></script>
+  <script async src="tcltk.js"></script>
 </body>
 </html>
