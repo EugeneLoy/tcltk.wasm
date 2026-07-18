@@ -62,6 +62,7 @@ jobs:
 
       - name: Build browser app
         run: |
+          source .emsdk/emsdk_env.sh
           emcc --version
           ninja --version
           tsc --version
