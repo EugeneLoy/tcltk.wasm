@@ -3,7 +3,7 @@
 const { test, expect } = require("@playwright/test");
 
 for (const count of [3, 8]) {
-  test(`Tk menubar with ${count} cascades maps its client and opens a popup`, async ({
+  test(`Tk menubar with ${count} cascades maps its client and invokes a command`, async ({
     page,
   }) => {
     const script = [
@@ -52,6 +52,14 @@ for (const count of [3, 8]) {
         return bounds && [bounds.width, bounds.height];
       })
       .toEqual([Number(ready[6]), Number(ready[7])]);
+    const popupBox = await popup.boundingBox();
+    expect(popupBox).not.toBeNull();
+    await page.mouse.click(
+      popupBox.x + popupBox.width / 2,
+      popupBox.y + popupBox.height - 8,
+    );
+    await expect(page.locator("#tk-browser-status")).toHaveText("selected 1");
+    await expect(popup).toBeHidden();
   });
 }
 
