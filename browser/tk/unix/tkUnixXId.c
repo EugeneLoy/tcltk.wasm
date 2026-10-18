@@ -4,6 +4,11 @@
  *	Tk's Unix Makefile still expects this translation unit. The browser
  *	Xlib compatibility implementation is built from third-party/x11.wasm as
  *	libx11wasm.a; this file intentionally keeps only the Tk-side bind slot.
+ *
+ * Copyright (c) 1993 The Regents of the University of California.
+ * Copyright (c) 1994-1997 Sun Microsystems, Inc.
+ * Browser modifications Copyright (c) 2026 t3tra.
+ * Distributed under the Tk license in LICENSES/Tk.txt, including changes.
  */
 
 #include "tkUnixInt.h"

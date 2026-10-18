@@ -78,6 +78,8 @@ jobs:
           cp build/browser/tcltk.js _site/tcltk.js
           cp build/browser/tcltk.wasm _site/tcltk.wasm
           cp build/browser/tcltk.data _site/tcltk.data
+          cp build/browser/LICENSE build/browser/THIRD_PARTY_NOTICES.md _site/
+          cp -R build/browser/LICENSES _site/LICENSES
           touch _site/.nojekyll
 
       - name: Configure GitHub Pages

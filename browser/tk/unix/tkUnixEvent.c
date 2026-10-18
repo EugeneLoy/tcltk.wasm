@@ -2,6 +2,10 @@
  * tkUnixEvent.c --
  *
  *	Browser overlay for Tk's Unix/X11 event source.
+ *
+ * Copyright (c) 1995-1997 Sun Microsystems, Inc.
+ * Browser modifications Copyright (c) 2026 t3tra.
+ * Distributed under the Tk license in LICENSES/Tk.txt, including changes.
  */
 
 #include "tkUnixInt.h"

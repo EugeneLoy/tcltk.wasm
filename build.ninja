@@ -80,6 +80,27 @@ rule link_browser_app
   command = root=$$(pwd) && mkdir -p "$$root/$browser_dist" "$$root/$emcache" && EM_CACHE="$$root/$emcache" emcc "$$root/$browser_build/main.o" "$$root/$x11_lib" "$$root/$tk_build/libtk8.6.a" "$$root/$tcl_build/libtcl8.6.a" --js-library "$$root/$x11wasm_js_library" --pre-js "$$root/$x11wasm_js_pre" --shell-file "$$root/browser/app/shell.html" --preload-file "$$root/$tcl_src/library@/lib/tcl8.6" --preload-file "$$root/$tk_src/library@/lib/tk8.6" -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -o "$$root/$browser_dist/tcltk.html"
   description = link browser app
 
+rule stage_browser_licenses
+  command = mkdir -p "$browser_dist/LICENSES/x11.wasm/LICENSES" && cp LICENSE THIRD_PARTY_NOTICES.md "$browser_dist/" && cp LICENSES/*.txt "$browser_dist/LICENSES/" && cp "$x11_src/LICENSE" "$x11_src/THIRD_PARTY_NOTICES.md" "$browser_dist/LICENSES/x11.wasm/" && cp "$x11_src/LICENSES/X11.txt" "$x11_src/LICENSES/Tk.txt" "$browser_dist/LICENSES/x11.wasm/LICENSES/"
+  description = collect Tcl/Tk browser licenses
+
+build $browser_dist/LICENSE $
+  $browser_dist/THIRD_PARTY_NOTICES.md $
+  $browser_dist/LICENSES/Tcl.txt $
+  $browser_dist/LICENSES/Tk.txt $
+  $browser_dist/LICENSES/Tcl-Tk-extra.txt $
+  $browser_dist/LICENSES/LibTomMath.txt $
+  $browser_dist/LICENSES/zlib.txt $
+  $browser_dist/LICENSES/x11.wasm/LICENSE $
+  $browser_dist/LICENSES/x11.wasm/THIRD_PARTY_NOTICES.md $
+  $browser_dist/LICENSES/x11.wasm/LICENSES/X11.txt $
+  $browser_dist/LICENSES/x11.wasm/LICENSES/Tk.txt: stage_browser_licenses $
+  LICENSE THIRD_PARTY_NOTICES.md $
+  LICENSES/Tcl.txt LICENSES/Tk.txt LICENSES/Tcl-Tk-extra.txt $
+  LICENSES/LibTomMath.txt LICENSES/zlib.txt $
+  $x11_src/LICENSE $x11_src/THIRD_PARTY_NOTICES.md $
+  $x11_src/LICENSES/X11.txt $x11_src/LICENSES/Tk.txt
+
 build $tcl_overlay_unix_stamp: overlay_tcl_unix build.ninja browser/tcl/unix/tclUnixTime.c
 build $tcl_build/Makefile: configure_tcl build.ninja $configure_tools/uname
 build $tcl_build/.built: build_tcl $tcl_build/Makefile $tcl_overlay_unix_stamp
@@ -97,10 +118,11 @@ build configure-tcl: phony $tcl_build/Makefile
 build tcl: phony $tcl_build/.built
 build configure-tk: phony $tk_build/Makefile
 build tk: phony $tk_build/.built
-build x11: phony $x11_lib $x11wasm_js_library $x11wasm_js_pre
+build x11: phony $x11_lib $x11wasm_js_library $x11wasm_js_pre x11wasm_licenses
 build compile_commands: phony build/compile_commands.json
 build typecheck_js: phony build/typecheck-js.stamp
-build browser: phony $browser_dist/tcltk.html
+build licenses: phony $browser_dist/LICENSE
+build browser: phony $browser_dist/tcltk.html licenses
 build all: phony tk
 
 default all

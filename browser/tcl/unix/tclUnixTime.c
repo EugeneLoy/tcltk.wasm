@@ -1,3 +1,10 @@
+/*
+ * Browser overlay for Tcl's Unix time backend.
+ * Copyright (c) 1995 Sun Microsystems, Inc.
+ * Browser modifications Copyright (c) 2026 t3tra.
+ * Distributed under the Tcl license in LICENSES/Tcl.txt, including changes.
+ */
+
 #ifdef __EMSCRIPTEN__
 #define TCL_BROWSER_WIDE_CLICKS 1
 /*

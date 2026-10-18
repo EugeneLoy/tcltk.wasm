@@ -3,6 +3,11 @@
  *
  *	Browser/WASM port header used while the backend is still built through
  *	Tk's unix Makefile shape.
+ *
+ * Copyright (c) 1991-1993 The Regents of the University of California.
+ * Copyright (c) 1994-1996 Sun Microsystems, Inc.
+ * Browser modifications Copyright (c) 2026 t3tra.
+ * Distributed under the Tk license in LICENSES/Tk.txt, including changes.
  */
 
 #ifndef _UNIXPORT
