@@ -2,6 +2,59 @@
 
 const { test, expect } = require("@playwright/test");
 
+for (const count of [3, 8]) {
+  test(`Tk menubar with ${count} cascades maps its client and opens a popup`, async ({
+    page,
+  }) => {
+    const script = [
+      "catch {destroy .root}",
+      "menu .m",
+      ". configure -menu .m",
+      ...Array.from({ length: count }, (_, index) => {
+        const item = index + 1;
+        return [
+          `menu .m.${item}`,
+          `.m.${item} add command -label New${item} -command {browser::setStatus {selected ${item}}}`,
+          `.m add cascade -label File${item} -menu .m.${item}`,
+        ].join("\n");
+      }),
+      "update",
+      "set bar {}",
+      'foreach child [winfo children .] {if {[winfo class $child] eq "Menu" && [$child cget -type] eq "menubar"} {set bar $child}}',
+      "set popup [$bar entrycget 1 -menu]",
+      "list ready [winfo id .] [winfo id $bar] [winfo id $popup] [$bar xposition 1] [$bar yposition 1] [winfo reqwidth $popup] [winfo reqheight $popup]",
+    ].join("\n");
+    await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+    await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+      timeout: 15000,
+    });
+    const ready = ((await page.locator("#tk-browser-result").textContent()) || "")
+      .trim()
+      .split(/\s+/);
+    expect(ready[0]).toBe("ready");
+    const clientId = Number.parseInt(ready[1], 0);
+    const barId = Number.parseInt(ready[2], 0);
+    const popupId = Number.parseInt(ready[3], 0);
+    const bar = page.locator(`[data-x11-wasm-xid="${barId}"]`);
+    const popup = page.locator(`[data-x11-wasm-xid="${popupId}"]`);
+    await expect(page.locator(`[data-x11-wasm-xid="${clientId}"]`)).toBeVisible();
+    await expect(bar).toBeVisible();
+    const box = await bar.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(
+      box.x + Number(ready[4]) + 15,
+      box.y + Number(ready[5]) + 10,
+    );
+    await expect(popup).toBeVisible();
+    await expect
+      .poll(async () => {
+        const bounds = await popup.boundingBox();
+        return bounds && [bounds.width, bounds.height];
+      })
+      .toEqual([Number(ready[6]), Number(ready[7])]);
+  });
+}
+
 test("Tk popup menu dispatches command from browser pointer input", async ({
   page,
 }) => {
