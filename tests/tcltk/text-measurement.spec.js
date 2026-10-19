@@ -11,6 +11,17 @@ const clusters = [
   ["ZWJ emoji", "\ud83d\udc69\u200d\ud83d\udcbb"],
 ];
 
+test("text oracle waits for asynchronous update and propagates Tcl errors", async ({ page }) => {
+  await openTextPage(page, "set oracleState ready");
+  for (let serial = 1; serial <= 3; serial++) {
+    expect(await evalText(page, `update\nset oracleState result${serial}`))
+      .toBe(`result${serial}`);
+  }
+  await expect(evalText(page, "update\nerror {text oracle error sentinel}"))
+    .rejects.toThrow("text oracle error sentinel");
+  expect(await evalText(page, "update\nset oracleState recovered")).toBe("recovered");
+});
+
 for (const [name, prefix] of clusters) {
   test(`Tk measures ${name} by its drawn advance`, async ({ page }) => {
     const values = (await openTextPage(page, [
@@ -271,17 +282,22 @@ test("Tk native byte ranges retain embedded modified UTF-8 NUL", async ({ page }
 
 for (const [name, prefix] of clusters) {
   test(`Tk ${name} wrap preserves glyphs at fitting and undersized widths`, async ({ page }) => {
-    await openTextPage(page, [
+    const glyphId = Number(await openTextPage(page, [
       `set prefix {${prefix}}`,
       "canvas .c -width 260 -height 70 -background white -highlightthickness 0",
+      "canvas .glyph -width 260 -height 70 -background white -highlightthickness 0",
       "canvas .w -width 260 -height 200 -background white -highlightthickness 0",
       "frame .holder -width 260 -height 200",
-      "pack .c .w .holder -anchor w",
+      "pack .c .glyph .w .holder -anchor w",
       ".c create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      ".glyph create text 12 8 -anchor nw -text $prefix -font {Helvetica -32}",
       "text .holder.t -font {Helvetica -32} -wrap char -background white -borderwidth 0 -highlightthickness 0 -padx 0 -pady 0 -insertwidth 0",
       "update",
-    ].join("\n"));
+      "winfo id .glyph",
+    ].join("\n")));
     const run = await drawnTextRun(page, prefix);
+    const glyphPixels = (await pixelBounds(page, glyphId, "nonwhite")).count;
+    expect(glyphPixels, "independent complete-glyph reference is nonblank").toBeGreaterThan(20);
     for (const width of [run.advance * 2, run.advance - 1, 1]) {
       await page.evaluate(() => { window.__textOracle.fills.length = 0; });
       const values = (await evalText(page, [
@@ -313,7 +329,9 @@ for (const [name, prefix] of clusters) {
         `width=${width}: complete glyphs only: ${JSON.stringify(complex)}`).toBe(true);
       const lines = new Set(complex.map((fill) => fill.y));
       expect(lines.size, `width=${width}: paint must actually wrap`).toBeGreaterThan(1);
-      expect((await pixelBounds(page, Number(values[2]))).count).toBeGreaterThan(20);
+      expect((await pixelBounds(page, Number(values[2]), "nonwhite")).count,
+        `width=${width}: exactly three complete glyphs survive pixel readback`)
+        .toBe(glyphPixels * 3);
     }
   });
 

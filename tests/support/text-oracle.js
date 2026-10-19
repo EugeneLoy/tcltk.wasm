@@ -110,7 +110,9 @@ async function pixelBounds(page, id, color = "ink") {
             ? g > 200 && r < 50 && b < 50 && a > 200
             : wanted === "magenta"
               ? r === 255 && g === 0 && b === 255 && a > 200
-              : r < 80 && g < 80 && b < 80 && a > 200;
+              : wanted === "nonwhite"
+                ? Math.min(r, g, b) < 245 && a > 200
+                : r < 80 && g < 80 && b < 80 && a > 200;
           if (match) {
             left = Math.min(left, x); right = Math.max(right, x);
             top = Math.min(top, y); bottom = Math.max(bottom, y);
