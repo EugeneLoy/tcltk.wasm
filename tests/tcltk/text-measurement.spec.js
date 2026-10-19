@@ -11,6 +11,19 @@ const clusters = [
   ["ZWJ emoji", "\ud83d\udc69\u200d\ud83d\udcbb"],
 ];
 
+test.use({ deviceScaleFactor: 1 });
+
+test("text oracle waits for asynchronous update and propagates Tcl errors", async ({ page }) => {
+  await openTextPage(page, "set oracleState ready");
+  for (let serial = 1; serial <= 3; serial++) {
+    expect(await evalText(page, `update\nset oracleState result${serial}`))
+      .toBe(`result${serial}`);
+  }
+  await expect(evalText(page, "update\nerror {text oracle error sentinel}"))
+    .rejects.toThrow("text oracle error sentinel");
+  expect(await evalText(page, "update\nset oracleState recovered")).toBe("recovered");
+});
+
 for (const [name, prefix] of clusters) {
   test(`Tk measures ${name} by its drawn advance`, async ({ page }) => {
     const values = (await openTextPage(page, [
@@ -81,8 +94,7 @@ for (const [name, prefix] of clusters) {
         expect(x).toBeGreaterThanOrEqual(0);
         expect(x).toBeLessThanOrEqual(run.advance);
         if (delta >= 0) expect(x, "boundary hit affinity").toBe(run.advance);
-        else expect(x + width, "left hit must cover the painted pixel")
-          .toBeGreaterThanOrEqual(run.advance - 1);
+        else expect([0, run.advance], "left or right caret affinity").toContain(x);
       }
     }
     const boxes = (await evalText(page, [
@@ -101,6 +113,15 @@ for (const [name, prefix] of clusters) {
         if (i < prefix.length) expect(x + width).toBeLessThanOrEqual(run.advance);
         previous = x;
       }
+      const scalarUnits = prefix.codePointAt(0) > 0xffff ? 2 : 1;
+      const scalarBoxes = Array.from({ length: scalarUnits }, (_, index) => ({
+        x: boxes[index * 8 + offset] - origin,
+        width: boxes[index * 8 + offset + 2],
+      }));
+      expect(Math.min(...scalarBoxes.map((box) => box.x))).toBe(0);
+      expect(Math.max(...scalarBoxes.map((box) => box.x + box.width)),
+        "the first Unicode scalar's Tcl-unit union covers its painted glyph")
+        .toBe(run.advance);
     }
   });
 }
@@ -263,17 +284,27 @@ test("Tk native byte ranges retain embedded modified UTF-8 NUL", async ({ page }
 
 for (const [name, prefix] of clusters) {
   test(`Tk ${name} wrap preserves glyphs at fitting and undersized widths`, async ({ page }) => {
-    await openTextPage(page, [
+    const glyphId = Number(await openTextPage(page, [
       `set prefix {${prefix}}`,
       "canvas .c -width 260 -height 70 -background white -highlightthickness 0",
+      "canvas .glyph -width 260 -height 70 -background white -highlightthickness 0",
       "canvas .w -width 260 -height 200 -background white -highlightthickness 0",
       "frame .holder -width 260 -height 200",
-      "pack .c .w .holder -anchor w",
+      "pack .c .glyph .w .holder -anchor w",
       ".c create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      ".glyph create text 12 8 -anchor nw -text $prefix -font {Helvetica -32}",
       "text .holder.t -font {Helvetica -32} -wrap char -background white -borderwidth 0 -highlightthickness 0 -padx 0 -pady 0 -insertwidth 0",
       "update",
-    ].join("\n"));
+      "winfo id .glyph",
+    ].join("\n")));
     const run = await drawnTextRun(page, prefix);
+    const glyph = await pixelBounds(page, glyphId, "nonwhite");
+    const glyphPixels = glyph.count;
+    expect(glyphPixels, "independent complete-glyph reference is nonblank").toBeGreaterThan(20);
+    expect(glyph.left, "reference has no left overhang").toBeGreaterThanOrEqual(12);
+    expect(glyph.right, "adjacent glyphs cannot overlap").toBeLessThan(12 + run.advance);
+    const lineHeight = Number(await evalText(page, "font metrics {Helvetica -32} -linespace"));
+    expect(glyph.bottom - glyph.top + 1).toBeLessThanOrEqual(lineHeight);
     for (const width of [run.advance * 2, run.advance - 1, 1]) {
       await page.evaluate(() => { window.__textOracle.fills.length = 0; });
       const values = (await evalText(page, [
@@ -297,6 +328,8 @@ for (const [name, prefix] of clusters) {
           .map((fill) => [JSON.stringify(fill), fill])).values());
       });
       const complex = fills.filter((fill) => fill.font.startsWith("32px "));
+      expect(complex.every((fill) => Number.isInteger(fill.x) && Number.isInteger(fill.y)),
+        "reference and wrapped glyph origins stay on integer pixels").toBe(true);
       expect(complex.length, `width=${width}: a nonempty scene is required`)
         .toBeGreaterThanOrEqual(3);
       expect(complex.map((fill) => fill.text), `width=${width}: no re-shaped tail glyphs`)
@@ -305,7 +338,9 @@ for (const [name, prefix] of clusters) {
         `width=${width}: complete glyphs only: ${JSON.stringify(complex)}`).toBe(true);
       const lines = new Set(complex.map((fill) => fill.y));
       expect(lines.size, `width=${width}: paint must actually wrap`).toBeGreaterThan(1);
-      expect((await pixelBounds(page, Number(values[2]))).count).toBeGreaterThan(20);
+      expect((await pixelBounds(page, Number(values[2]), "nonwhite")).count,
+        `width=${width}: exactly three complete glyphs survive pixel readback`)
+        .toBe(glyphPixels * 3);
     }
   });
 
@@ -355,8 +390,6 @@ for (const [name, prefix] of clusters) {
       ".c select from $item 0",
       ".c select to $item [expr {$n-1}]",
       ".c icursor $item $n",
-      ".c focus $item",
-      "focus -force .c",
       "update",
       "join [concat [list [winfo id .c] [.c index $item insert] [.c index $item sel.first] [.c index $item sel.last]] [.c bbox $item]] |",
     ].join("\n"))).split("|").map(Number);
@@ -367,6 +400,7 @@ for (const [name, prefix] of clusters) {
     expect(selection.left).toBe(40);
     expect(selection.width, "selection covers the drawn cluster, not an isolated tail")
       .toBe(run.advance);
+    await evalText(page, ".c focus $item; focus -force .c; update");
     const caret = await pixelBounds(page, values[0], "magenta");
     expect(caret.count, "caret must actually be painted").toBeGreaterThan(0);
     expect(caret.left).toBe(40 + run.advance - 1);

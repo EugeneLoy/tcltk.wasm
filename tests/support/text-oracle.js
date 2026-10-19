@@ -33,20 +33,32 @@ async function openTextPage(page, script) {
 }
 
 async function evalText(page, script) {
-  const code = await page.evaluate((source) => {
+  const { code, result, serial } = await page.evaluate(async (source) => {
     const module = window.Module;
-    const bytes = new TextEncoder().encode(`${source}\0`);
+    const oracle = window.__textOracle;
+    const serial = oracle.serial = (oracle.serial || 0) + 1;
+    const quoted = source.replace(/[\\$"\[]/g, "\\$&");
+    const wrapped = `set ::textOracleLastResult [uplevel #0 "${quoted}"]\n`
+      + `set ::textOracleLastResult "${serial}\\n$::textOracleLastResult"`;
+    const bytes = new TextEncoder().encode(`${wrapped}\0`);
     const pointer = module._malloc(bytes.length);
     try {
       window.HEAPU8.set(bytes, pointer);
-      return module._TkBrowserEval(pointer);
+      let code = module._TkBrowserEval(pointer);
+      if (code && typeof code.then === "function") {
+        code = await code;
+      } else if (window.Asyncify?.currData) {
+        // A direct Emscripten export can unwind poll(0) with a numeric return.
+        code = await window.Asyncify.whenDone();
+      }
+      return { code, result: module.tkBrowserEvalResult, serial };
     } finally {
       module._free(pointer);
     }
   }, script);
-  const result = (await page.locator("#tk-browser-result").textContent()) || "";
   expect(code, result).toBe(0);
-  return result;
+  expect(result.startsWith(`${serial}\n`), `fresh Tcl evaluation serial ${serial}: ${result}`).toBe(true);
+  return result.slice(String(serial).length + 1);
 }
 
 async function drawnTextRun(page, text) {
@@ -98,7 +110,9 @@ async function pixelBounds(page, id, color = "ink") {
             ? g > 200 && r < 50 && b < 50 && a > 200
             : wanted === "magenta"
               ? r === 255 && g === 0 && b === 255 && a > 200
-              : r < 80 && g < 80 && b < 80 && a > 200;
+              : wanted === "nonwhite"
+                ? Math.min(r, g, b) < 245 && a > 200
+                : r < 80 && g < 80 && b < 80 && a > 200;
           if (match) {
             left = Math.min(left, x); right = Math.max(right, x);
             top = Math.min(top, y); bottom = Math.max(bottom, y);
