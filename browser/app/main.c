@@ -15,6 +15,9 @@
 #include <tk.h>
 
 extern int TkBrowserServiceXEvents(void);
+extern int TkpMeasureCharsInContext(Tk_Font tkfont, const char *source,
+	int numBytes, int rangeStart, int rangeLength, int maxLength, int flags,
+	int *lengthPtr);
 
 static Tcl_Interp *browserInterp;
 
@@ -300,6 +303,58 @@ TclBrowserTestClockClicksUsesWideTime(void)
 	return 0;
     }
     return clicks == (Tcl_WideInt)5000123456LL;
+}
+
+/* Keep the probe byte-oriented, including Tcl's modified UTF-8 strings. */
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserTestMeasureChars(
+    const char *fontName,
+    const char *variable,
+    int rangeStart,
+    int rangeLength,
+    int maxLength,
+    int flags,
+    int inContext)
+{
+    Tcl_Obj *sourceObj, *result[3];
+    Tk_Font font;
+    const char *source;
+    int numBytes, count, width;
+
+    if (browserInterp == NULL) {
+	return TCL_ERROR;
+    }
+    sourceObj = Tcl_GetVar2Ex(browserInterp, variable, NULL,
+	    TCL_GLOBAL_ONLY | TCL_LEAVE_ERR_MSG);
+    if (sourceObj == NULL) {
+	return TCL_ERROR;
+    }
+    source = Tcl_GetStringFromObj(sourceObj, &numBytes);
+    if (rangeLength == -1) {
+	rangeLength = numBytes - rangeStart;
+    }
+    if ((rangeStart < 0) || (rangeStart > numBytes) || (rangeLength < 0)
+	    || (rangeLength > numBytes - rangeStart)) {
+	return TCL_ERROR;
+    }
+    font = Tk_GetFont(browserInterp, Tk_MainWindow(browserInterp), fontName);
+    if (font == NULL) {
+	return TCL_ERROR;
+    }
+    if (inContext) {
+	count = TkpMeasureCharsInContext(font, source, numBytes, rangeStart,
+		rangeLength, maxLength, flags, &width);
+    } else {
+	count = Tk_MeasureChars(font, source + rangeStart, rangeLength,
+		maxLength, flags, &width);
+    }
+    Tk_FreeFont(font);
+    result[0] = Tcl_NewIntObj(count);
+    result[1] = Tcl_NewIntObj(width);
+    result[2] = Tcl_NewIntObj(numBytes);
+    Tcl_SetObjResult(browserInterp, Tcl_NewListObj(3, result));
+    BrowserSetResultObj(TCL_OK, Tcl_GetObjResult(browserInterp));
+    return TCL_OK;
 }
 
 static int
