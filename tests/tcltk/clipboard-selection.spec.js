@@ -1,6 +1,88 @@
 // @ts-check
 
 const { test, expect } = require("@playwright/test");
+const { evalTcl } = require("../support/tcltk");
+
+test("mock clipboard denial preserves local selection and allows a later write", async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    const writes = window["__clipboardWrites"] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text) => {
+        writes.push(text);
+        calls++;
+        if (calls <= 2) {
+          return Promise.reject(new DOMException("permission denied", "NotAllowedError"));
+        }
+        return Promise.resolve();
+      } },
+    });
+  });
+  const script = [
+    "entry .target",
+    "clipboard clear",
+    "clipboard append local",
+    "update",
+    "set ::calls 0",
+    "button .retry -text Retry -command {incr ::calls; set code [catch {clipboard clear; clipboard append recovered-$::calls; update; clipboard get} value]; browser::setResult [list retry $code $value]}",
+    "pack .target .retry",
+    "bind all <KeyPress> {browser::setResult [list typed %A]}",
+    "focus -force .target",
+    "update",
+    "list [winfo id .retry] [clipboard get]",
+  ].join("\n");
+  await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+  const [id, local] = (await page.locator("#tk-browser-result").innerText()).split(" ");
+  expect(local).toBe("local");
+  await expect.poll(() => page.evaluate(() => window["Module"].x11WasmBackend.clipboardWriteStatus)).toBe("failed");
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.locator(`[data-x11-wasm-xid="${Number.parseInt(id, 0)}"]`).click();
+    await expect(page.locator("#tk-browser-result")).toHaveText(`retry 0 recovered-${attempt}`);
+    await expect.poll(() => page.evaluate(() => window["Module"].x11WasmBackend.clipboardWriteStatus)).toBe("written");
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  }
+  expect(await page.evaluate(() => window["__clipboardWrites"])).toEqual([
+    "", "local", "", "recovered-1", "", "recovered-2",
+  ]);
+  await page.keyboard.type("z");
+  await expect(page.locator("#tk-browser-result")).toHaveText("typed z");
+  expect(await page.evaluate(() => window["Module"].x11WasmBackend.userActivationServiceError || "")).toBe("");
+});
+
+for (const obsoleteResult of ["resolve", "reject"]) {
+  test(`mock clipboard same-text retry ignores obsolete ${obsoleteResult}`, async ({ page }) => {
+    await page.goto(`/tcltk.html?${new URLSearchParams({ eval: "list ready" })}`);
+    await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+    const result = await page.evaluate(async (obsoleteResult) => {
+      const backend = window["Module"].x11WasmBackend;
+      const pending = [];
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) },
+      });
+      backend.setClipboardText("same text");
+      backend.setClipboardText("same text");
+      if (obsoleteResult === "reject") {
+        pending[1].resolve();
+      } else {
+        pending[1].reject(new DOMException("current denial", "NotAllowedError"));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const current = { status: backend.clipboardWriteStatus, error: backend.clipboardWriteError };
+      if (obsoleteResult === "reject") {
+        pending[0].reject(new DOMException("obsolete denial", "NotAllowedError"));
+      } else {
+        pending[0].resolve();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { current, final: { status: backend.clipboardWriteStatus, error: backend.clipboardWriteError } };
+    }, obsoleteResult);
+    expect(result.final).toEqual(result.current);
+    expect(result.final.status).toBe(obsoleteResult === "reject" ? "written" : "failed");
+  });
+}
 
 test("Tk clipboard selection roundtrips inside the browser port", async ({
   page,
@@ -368,11 +450,11 @@ test("Tk clipboard get reads text cached from browser paste", async ({
   const value = "external clipboard \u3042\u3044\u3046";
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboard {} {",
     "  set status [catch {clipboard get} value]",
-    "  browser::setResult [list ready $status $value]",
+    "  list ready $status $value",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -410,6 +492,7 @@ test("Tk clipboard get reads text cached from browser paste", async ({
     };
   }, value);
   expect(cached).toEqual({ available: true, text: value });
+  await evalTcl(page, "::reportClipboard");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 {${value}}`,
     { timeout: 15000 },
@@ -626,11 +709,11 @@ test("Tk clipboard get reads text synced from navigator clipboard", async ({
 
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboard {} {",
     "  set status [catch {clipboard get} value]",
-    "  browser::setResult [list ready $status $value]",
+    "  list ready $status $value",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -665,6 +748,7 @@ test("Tk clipboard get reads text synced from navigator clipboard", async ({
   expect(synced.reads).toBeGreaterThanOrEqual(1);
   expect(synced.status).toBe("read");
   expect(synced.text).toBe(value);
+  await evalTcl(page, "::reportClipboard");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 {${value}}`,
     { timeout: 15000 },
@@ -677,8 +761,7 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
   const value = "external clipboard targets";
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboardTargets {} {",
     "  set targetsStatus [catch {selection get -selection CLIPBOARD -type TARGETS} targets]",
     "  set timestampStatus [catch {selection get -selection CLIPBOARD -type TIMESTAMP} timestamp]",
     "  set stringStatus [catch {selection get -selection CLIPBOARD -type STRING} stringText]",
@@ -692,8 +775,9 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
     "  set hasTargets [expr {$targetsStatus == 0 && {TARGETS} in $targets}]",
     "  set hasTimestamp [expr {$targetsStatus == 0 && {TIMESTAMP} in $targets}]",
     "  set timestampIsInteger [expr {$timestampStatus == 0 && [string is integer -strict $timestamp]}]",
-    "  browser::setResult [list ready $targetsStatus $hasString $hasUtf8 $hasText $hasCompound $hasTargets $hasTimestamp $timestampStatus $timestampIsInteger $stringStatus $stringText $textStatus $text $compoundStatus $compoundText $utf8Status $utf8Text]",
+    "  list ready $targetsStatus $hasString $hasUtf8 $hasText $hasCompound $hasTargets $hasTimestamp $timestampStatus $timestampIsInteger $stringStatus $stringText $textStatus $text $compoundStatus $compoundText $utf8Status $utf8Text",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -722,6 +806,7 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
     input.dispatchEvent(event);
   }, value);
 
+  await evalTcl(page, "::reportClipboardTargets");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 1 1 1 1 1 1 0 1 0 {${value}} 0 {${value}} 0 {${value}} 0 {${value}}`,
     { timeout: 15000 },

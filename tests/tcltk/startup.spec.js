@@ -1,6 +1,7 @@
 // @ts-check
 
 const { test, expect } = require("@playwright/test");
+const { evalTcl } = require("../support/tcltk");
 
 /**
  * @param {import("@playwright/test").Page} page
@@ -44,6 +45,55 @@ test("Tcl/Tk browser harness reaches running state", async ({ page }) => {
   expect(
     await page.locator("#tk-browser-root .x11-wasm-window").count(),
   ).toBeGreaterThan(0);
+});
+
+test("Tcl test helper waits for native evaluation completion", async ({ page }) => {
+  const query = new URLSearchParams({ eval: "set ::helperSeed ready" });
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  await page.evaluate(() => {
+    const target = /** @type {any} */ (window);
+    const module = target.Module;
+    const evalFn = module._TkBrowserEval;
+    const free = module._free;
+    const calls = [];
+    const frees = [];
+    let pointer = 0;
+    target.__helperTest = { calls, frees };
+    module._TkBrowserEval = (value) => {
+      pointer = value;
+      const code = evalFn(value);
+      calls.push({ code, pending: !!target.Asyncify.currData });
+      return code;
+    };
+    module._free = (value) => {
+      if (value === pointer) frees.push({ pending: !!target.Asyncify.currData });
+      free(value);
+    };
+  });
+  try {
+    expect(await evalTcl(page, "update; set ::helperValue {helper complete}")).toBe("helper complete");
+    await expect(evalTcl(page, "update; error {helper async failure}")).rejects.toThrow(/helper async failure/);
+    expect(await evalTcl(page, "expr {6 * 7}")).toBe("42");
+    const state = await page.evaluate(() => /** @type {any} */ (window).__helperTest);
+    expect(state.calls.slice(0, 2)).toEqual([
+      { code: 0, pending: true },
+      { code: 0, pending: true },
+    ]);
+    expect(state.frees).toEqual([
+      { pending: false }, { pending: false }, { pending: false },
+    ]);
+  } finally {
+    // Drain only a broken caller so a regression cannot leak into teardown.
+    await page.evaluate(async () => {
+      const target = /** @type {any} */ (window);
+      if (target.Asyncify.currData && !target.Asyncify.asyncPromiseHandlers) {
+        await target.Asyncify.whenDone();
+      }
+    });
+  }
 });
 
 test("Tk startup options are separated from browser eval scripts", async ({
@@ -253,9 +303,8 @@ test("Tk screen dimensions follow browser root element size", async ({
   await page.setViewportSize({ width: 840, height: 620 });
   const script = [
     "proc ::reportScreen {} {",
-    "  browser::setResult [list ready [winfo screenwidth .] [winfo screenheight .]]",
+    "  list ready [winfo screenwidth .] [winfo screenheight .]",
     "}",
-    "after 250 ::reportScreen",
     "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
@@ -265,9 +314,21 @@ test("Tk screen dimensions follow browser root element size", async ({
     timeout: 15000,
   });
   await page.setViewportSize({ width: 760, height: 560 });
-  await expect
-    .poll(async () => (await page.locator("#tk-browser-result").textContent()) || "")
-    .toMatch(/^ready /);
+  await page.waitForFunction(() => {
+    const root = document.getElementById("tk-browser-root");
+    const canvas = root?.querySelector(":scope > canvas");
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot & { rootWindow?: number } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    const resource = backend?.resources.get(backend.rootWindow || 0);
+    return root && canvas instanceof HTMLCanvasElement &&
+      root.clientWidth > 0 && root.clientHeight > 0 &&
+      canvas.width === root.clientWidth && canvas.height === root.clientHeight &&
+      resource?.width === root.clientWidth && resource?.height === root.clientHeight;
+  });
+  await evalTcl(page, "::reportScreen");
+  await expect(page.locator("#tk-browser-result")).toHaveText(/^ready /);
 
   const result = (
     (await page.locator("#tk-browser-result").textContent()) || ""

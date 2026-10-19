@@ -50,6 +50,38 @@ test("actual Chrome message boxes retain activation and focus across cancel and 
   expect(await page.evaluate(() => window["__dialogActivation"])).toEqual([true, true, true, true]);
 });
 
+test("actual Chrome fallback save downloads on repeated activation", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showSaveFilePicker", { configurable: true, value: undefined });
+  });
+  const script = [
+    "entry .target",
+    "set ::calls 0",
+    "button .save -text Save -command {incr ::calls; set path [::browser::getSaveFile -initialfile retry.txt]; set file [open $path w]; puts -nonewline $file saved-$::calls; close $file; browser::flushSaveFile $path retry.txt; browser::setResult [list saved $::calls]}",
+    "pack .target .save",
+    "focus -force .target",
+    "update",
+    "winfo id .save",
+  ].join("\n");
+  await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+  const id = Number.parseInt(await page.locator("#tk-browser-result").innerText(), 0);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator(`[data-x11-wasm-xid="${id}"]`).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("retry.txt");
+    const stream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    expect(Buffer.concat(chunks).toString()).toBe(`saved-${attempt}`);
+    await expect(page.locator("#tk-browser-result")).toHaveText(`saved ${attempt}`);
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  }
+});
+
 test("actual Chrome HTML filechooser accepts empty selection then reopens", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, "showOpenFilePicker", { configurable: true, value: undefined });

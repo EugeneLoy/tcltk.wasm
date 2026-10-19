@@ -2,6 +2,99 @@
 
 const { test, expect } = require("@playwright/test");
 
+/** @param {import("@playwright/test").Page} page @param {number} id */
+async function nativeWindowGeometry(page, id) {
+  return page.evaluate((id) => {
+    const backend = /** @type {any} */ (window).Module.x11WasmBackend;
+    backend.flush();
+    const resource = backend.resources.get(id);
+    const rect = resource.canvas.getBoundingClientRect();
+    return {
+      native: resource.nativeGeometry,
+      committed: [resource.width, resource.height],
+      pending: [resource.pendingWidth, resource.pendingHeight],
+      css: [rect.width, rect.height],
+      canvas: [resource.canvas.width, resource.canvas.height],
+    };
+  }, id);
+}
+
+/** @param {import("@playwright/test").Page} page @param {string} script */
+async function evalWindowManager(page, script) {
+  return page.evaluate(async (script) => {
+    const global = /** @type {any} */ (window);
+    const module = global.Module;
+    while (global.Asyncify?.currData) await new Promise((resolve) => setTimeout(resolve, 0));
+    const bytes = new TextEncoder().encode(script + "\0");
+    const pointer = module._malloc(bytes.length);
+    global.HEAPU8.set(bytes, pointer);
+    try {
+      const result = module._TkBrowserEval(pointer);
+      const code = result?.then ? await result : global.Asyncify?.currData
+        ? await global.Asyncify.whenDone() : result;
+      if (code !== 0) throw new Error(module.tkBrowserEvalResult);
+      return String(module.tkBrowserEvalResult);
+    } finally {
+      module._free(pointer);
+    }
+  }, script);
+}
+
+test("Tk zoom synchronizes native wrapper client geometry and edge hits", async ({ page }) => {
+  const script = "toplevel .nativezoom; wm geometry .nativezoom 240x150+31+37; update; winfo id .nativezoom";
+  await page.goto(`/tcltk.html?${new URLSearchParams({eval: script})}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok");
+  const id = Number(await page.locator("#tk-browser-result").textContent());
+  const read = "join [list [winfo width .nativezoom] [winfo height .nativezoom] [winfo rootx .nativezoom] [winfo rooty .nativezoom] [winfo containing [expr {[winfo rootx .nativezoom]+[winfo width .nativezoom]-2}] [expr {[winfo rooty .nativezoom]+[winfo height .nativezoom]-2}]]] |";
+  const zoom = (await evalWindowManager(page, "wm attributes .nativezoom -zoomed 1; update; " + read)).split("|");
+  const root = await page.evaluate(() => {
+    const backend = /** @type {any} */ (window).Module.x11WasmBackend;
+    const root = backend.resources.get(backend.rootWindow);
+    return [root.width, root.height];
+  });
+  expect(zoom.slice(0, 4).map(Number)).toEqual([...root, 0, 0]);
+  expect(zoom[4]).toBe(".nativezoom");
+  expect(await nativeWindowGeometry(page, id)).toEqual({native: true,
+    committed: root, pending: root, css: root, canvas: root});
+  const restored = (await evalWindowManager(page, "wm attributes .nativezoom -zoomed 0; update; " + read)).split("|");
+  expect(restored.slice(0, 4).map(Number)).toEqual([240, 150, 31, 37]);
+  expect(restored[4]).toBe(".nativezoom");
+  expect(await nativeWindowGeometry(page, id)).toEqual({native: true,
+    committed: [240,150], pending: [240,150], css: [240,150], canvas: [240,150]});
+});
+
+test("actual browser fullscreen synchronizes native screen geometry and pointer coordinates", async ({ page }) => {
+  const script = "toplevel .nativefull; wm geometry .nativefull 240x150+31+37; bind .nativefull <Motion> {set ::nativepointer [list %X %Y %x %y %W]}; update; winfo id .nativefull";
+  await page.goto(`/tcltk.html?${new URLSearchParams({eval: script})}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok");
+  const id = Number(await page.locator("#tk-browser-result").textContent());
+  const initial = await evalWindowManager(page, "list [winfo screenwidth .nativefull] [winfo screenheight .nativefull]");
+  await page.evaluate((id) => {
+    const resource = /** @type {any} */ (window).Module.x11WasmBackend.resources.get(id);
+    const button = document.createElement("button");
+    button.textContent = "Enter native fullscreen";
+    button.onclick = () => resource.element.requestFullscreen();
+    document.body.prepend(button);
+  }, id);
+  await page.getByRole("button", {name: "Enter native fullscreen"}).click();
+  await expect.poll(() => page.evaluate(() =>
+    document.fullscreenElement?.getAttribute("data-x11-wasm-xid"))).toBe(String(id));
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("missing fullscreen viewport");
+  const size = [viewport.width, viewport.height];
+  await expect.poll(async () => (await evalWindowManager(page, "update; list [winfo screenwidth .nativefull] [winfo screenheight .nativefull] [winfo width .nativefull] [winfo height .nativefull] [wm attributes .nativefull -fullscreen]")).split(" ").map(Number)).toEqual([...size, ...size, 1]);
+  expect(await nativeWindowGeometry(page, id)).toEqual({native: true,
+    committed: size, pending: size, css: size, canvas: size});
+  await page.mouse.move(viewport.width - 3, viewport.height - 3);
+  await expect.poll(() => evalWindowManager(page, "update; expr {[info exists ::nativepointer] ? $::nativepointer : {}}")).toBe(
+    `${viewport.width-3} ${viewport.height-3} ${viewport.width-3} ${viewport.height-3} .nativefull`);
+  expect(await evalWindowManager(page, `winfo containing ${viewport.width-3} ${viewport.height-3}`)).toBe(".nativefull");
+  await page.evaluate(() => document.exitFullscreen());
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  await expect.poll(() => evalWindowManager(page, "update; list [winfo screenwidth .nativefull] [winfo screenheight .nativefull]")).toBe(initial);
+  await expect.poll(() => evalWindowManager(page, "update; list [winfo width .nativefull] [winfo height .nativefull] [winfo rootx .nativefull] [winfo rooty .nativefull] [wm attributes .nativefull -fullscreen]")).toBe("240 150 31 37 0");
+});
+
 /**
  * @param {import("@playwright/test").Page} page
  * @param {{ rejectRequest?: boolean }=} options
@@ -1826,7 +1919,7 @@ test("Tk wm normal size hints update browser window metadata", async ({
     "wm minsize .sizehints 240 120",
     "wm maxsize .sizehints 360 220",
     "update",
-    "join [list ready [join [wm minsize .sizehints] ,] [join [wm maxsize .sizehints] ,] [winfo id .sizehints]] |",
+    "join [list ready [join [wm minsize .sizehints] ,] [join [wm maxsize .sizehints] ,] [winfo id .sizehints] [winfo width .sizehints] [winfo height .sizehints]] |",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -1839,7 +1932,7 @@ test("Tk wm normal size hints update browser window metadata", async ({
   )
     .trim()
     .split("|");
-  expect(result).toEqual(["ready", "240,120", "360,220", expect.any(String)]);
+  expect(result.slice(0, 4)).toEqual(["ready", "240,120", "360,220", expect.any(String)]);
   const windowId = Number.parseInt(result[3], 0);
   expect(windowId).toBeGreaterThan(0);
   const hints = await page
@@ -1869,10 +1962,14 @@ test("Tk wm normal size hints update browser window metadata", async ({
   expect(hints.maxHeight).toBe("220");
   expect(hints.widthInc).toBe("1");
   expect(hints.heightInc).toBe("1");
-  expect(hints.styleMinWidth).toBe("240px");
-  expect(hints.styleMinHeight).toBe("120px");
-	expect(hints.styleMaxWidth).toBe("360px");
-	expect(hints.styleMaxHeight).toBe("220px");
+  expect(hints.styleMinWidth).toBe("0px");
+  expect(hints.styleMinHeight).toBe("0px");
+  expect(hints.styleMaxWidth).toBe("none");
+  expect(hints.styleMaxHeight).toBe("none");
+  const size = result.slice(4).map(Number);
+  expect(await nativeWindowGeometry(page, windowId)).toEqual({
+    native: true, committed: size, pending: size, css: size, canvas: size,
+  });
 });
 
 test("Tk wm positionfrom and sizefrom update size hint source flags", async ({
@@ -2017,7 +2114,7 @@ test("Tk wm grid updates browser base size and resize increment hints", async ({
   expect(hints.baseHeight).toBe(String(Math.max(0, reqHeight - 4 * 6)));
 });
 
-test("Tk wm aspect applies exact aspect ratio to browser CSS", async ({
+test("Tk wm aspect retains hints without overriding native geometry in CSS", async ({
   page,
 }) => {
   const script = [
@@ -2026,6 +2123,7 @@ test("Tk wm aspect applies exact aspect ratio to browser CSS", async ({
     "pack .aspect.l",
     "update",
     "wm aspect .aspect 4 3 4 3",
+    "wm geometry .aspect 250x160",
     "update",
     "join [list ready [join [wm aspect .aspect] ,] [winfo id .aspect]] |",
   ].join("\n");
@@ -2058,10 +2156,14 @@ test("Tk wm aspect applies exact aspect ratio to browser CSS", async ({
   expect(hints.minAspectY).toBe("3");
   expect(hints.maxAspectX).toBe("4");
   expect(hints.maxAspectY).toBe("3");
-  expect(hints.styleAspectRatio).toBe("4 / 3");
+  expect(hints.styleAspectRatio).toBe("");
+  const size = [250, 160];
+  expect(await nativeWindowGeometry(page, windowId)).toEqual({
+    native: true, committed: size, pending: size, css: size, canvas: size,
+  });
 });
 
-test("Tk wm resizable constraints update browser window CSS", async ({
+test("Tk wm resizable retains native hints without independent CSS constraints", async ({
   page,
 }) => {
   const script = [
@@ -2099,10 +2201,16 @@ test("Tk wm resizable constraints update browser window CSS", async ({
       return {
         minWidth: style.minWidth,
         maxWidth: style.maxWidth,
+        hintMinWidth: element.getAttribute("data-x11-wasm-min-width"),
+        hintMaxWidth: element.getAttribute("data-x11-wasm-max-width"),
       };
     });
-  expect(constraints.minWidth).toBe(`${windowWidth}px`);
-  expect(constraints.maxWidth).toBe(`${windowWidth}px`);
+  expect(constraints).toEqual({minWidth: "0px", maxWidth: "none",
+    hintMinWidth: String(windowWidth), hintMaxWidth: String(windowWidth)});
+  const size = [windowWidth, Number(result[4])];
+  expect(await nativeWindowGeometry(page, windowId)).toEqual({
+    native: true, committed: size, pending: size, css: size, canvas: size,
+  });
 });
 
 test("Tk window attributes update browser DOM style", async ({ page }) => {

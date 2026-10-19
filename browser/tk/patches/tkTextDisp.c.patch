@@ -1,19 +1,150 @@
 --- tkTextDisp.c
 +++ tkTextDisp.c
-@@ -7850 +7850 @@
+@@ -478,0 +479 @@
++    int forceFirst;		/* First visible scalar may overflow this line. */
+@@ -1496,0 +1498,5 @@
++#ifdef TK_WASM_BROWSER
++	if (elide || segPtr->typePtr != &tkTextCharType) {
++	    FinalizeBaseChunk(NULL);
++	}
++#endif
+@@ -7756,0 +7763,9 @@
++
++/* Decoration chunks can end before their measuring context does. */
++static void
++BrowserTextAppendContext(TkText *textPtr, const TkTextIndex *indexPtr,
++    TkTextSegment *segPtr, int byteOffset, int maxBytes, TextStyle *stylePtr,
++    Tcl_DString *contextPtr)
++{
++    TkTextIndex nextIndex = *indexPtr;
++    TkTextSegment *nextPtr;
+@@ -7757,0 +7773,39 @@
++    if (maxBytes != segPtr->size - byteOffset
++	    || memchr(segPtr->body.chars + byteOffset, '\t', (size_t)maxBytes)
++	    || memchr(segPtr->body.chars + byteOffset, '\n', (size_t)maxBytes)) {
++	return;
++    }
++    nextIndex.byteIndex += maxBytes;
++    for (nextPtr = segPtr->nextPtr; nextPtr != NULL; nextPtr = nextPtr->nextPtr) {
++	TextStyle *nextStyle;
++	const char *p, *end;
++	int compatible;
++
++	if (nextPtr->size == 0) {
++	    continue;
++	}
++	if (nextPtr->typePtr != &tkTextCharType) {
++	    break;
++	}
++	nextStyle = GetStyle(textPtr, &nextIndex);
++	compatible = !nextStyle->sValuePtr->elide
++		&& nextStyle->sValuePtr->tkfont == stylePtr->sValuePtr->tkfont
++		&& nextStyle->sValuePtr->offset == stylePtr->sValuePtr->offset;
++	FreeStyle(textPtr, nextStyle);
++	if (!compatible) {
++	    break;
++	}
++	p = nextPtr->body.chars;
++	end = p + nextPtr->size;
++	while (p < end && *p != '\t' && *p != '\n') {
++	    p++;
++	}
++	Tcl_DStringAppend(contextPtr, nextPtr->body.chars,
++		(int)(p - nextPtr->body.chars));
++	if (p < end) {
++	    break;
++	}
++	nextIndex.byteIndex += nextPtr->size;
++    }
++}
++
+@@ -7760,2 +7814,2 @@
+-    TCL_UNUSED(TkText *),	/* Text widget being layed out. */
+-    TCL_UNUSED(TkTextIndex *),	/* Index of first character to lay out
++    TkText *textPtr,		/* Text widget being layed out. */
++    TkTextIndex *indexPtr,	/* Index of first character to lay out
+@@ -7788 +7842 @@
+-    int lineOffset;
++    int lineOffset, contextBytes;
+@@ -7817,0 +7872 @@
++	bciPtr->forceFirst = noCharsYet;
+@@ -7835,3 +7890,43 @@
+-    bytesThatFit = CharChunkMeasureChars(chunkPtr, line,
+-	    lineOffset + maxBytes, lineOffset, -1, chunkPtr->x, maxX,
+-	    TK_ISOLATE_END, &nextX);
++    BrowserTextAppendContext(textPtr, indexPtr, segPtr, byteOffset, maxBytes,
++	    chunkPtr->stylePtr, baseString);
++    line = Tcl_DStringValue(baseString);
++    contextBytes = Tcl_DStringLength(baseString);
++    {
++	int width;
++	int available = (maxX < 0) ? -1
++		: ((maxX > chunkPtr->x) ? maxX - chunkPtr->x : 0);
++	bytesThatFit = TkpMeasureCharsInContext(tkfont, line, contextBytes,
++		lineOffset, maxBytes, available, 0, &width);
++	/* A Tcl tag may end between the units of one scalar. Do not strand
++	 * its zero-width high unit on a line that cannot fit the scalar. */
++	if (maxX >= 0 && bytesThatFit == maxBytes && maxBytes > 0
++		&& !(bciPtr->forceFirst && bciPtr->width == 0)) {
++	    int units = Tcl_NumUtfChars(line, lineOffset + maxBytes);
++	    if (units > 0) {
++		const char *last = Tcl_UtfAtIndex(line, units - 1);
++		char buffer[10] = {0};
++		int copied = contextBytes - (int)(last - line);
++		Tcl_UniChar unit = 0;
++		int ch, length;
++		if (copied > 6) {
++		    copied = 6;
++		}
++		memcpy(buffer, last, (size_t)copied);
++		length = TkUtfToUniChar(buffer, &ch);
++		Tcl_UtfToUniChar(buffer, &unit);
++		if (unit >= 0xd800 && unit <= 0xdbff && length <= copied
++			&& last + length > line + lineOffset + maxBytes) {
++		    int fit, ignored;
++		    fit = TkpMeasureCharsInContext(tkfont, line, contextBytes,
++			    lineOffset, (int)(last - line) + length - lineOffset,
++			    available, 0, &ignored);
++		    if (fit < maxBytes) {
++			bytesThatFit = fit;
++			TkpMeasureCharsInContext(tkfont, line, contextBytes,
++				lineOffset, fit, -1, 0, &width);
++		    }
++		}
++	    }
++	}
++	nextX = chunkPtr->x + width;
++    }
+@@ -7844 +7939,2 @@
+-	if ((bytesThatFit == 0) && noCharsYet) {
++	if (nextX == chunkPtr->x && (noCharsYet
++		|| (bciPtr->forceFirst && bciPtr->width == 0))) {
+@@ -7846 +7942,4 @@
+-	    int chLen = TkUtfToUniChar(p, &ch);
++	    int chLen = bytesThatFit + TkUtfToUniChar(p + bytesThatFit, &ch);
++	    if (chLen > maxBytes) {
++		chLen = maxBytes;
++	    }
+@@ -7849,3 +7948,4 @@
+-	    bytesThatFit = CharChunkMeasureChars(chunkPtr, line,
 -		    lineOffset+chLen, lineOffset, -1, chunkPtr->x, -1, 0,
-+		    lineOffset+maxBytes, lineOffset, lineOffset+chLen, chunkPtr->x, -1, 0,
-@@ -7856,0 +7857,19 @@
+-		    &nextX);
++	    int width;
++	    bytesThatFit = TkpMeasureCharsInContext(tkfont, line, contextBytes,
++		    lineOffset, chLen, -1, 0, &width);
++	    nextX = chunkPtr->x + width;
+@@ -7855,0 +7956,18 @@
++	}
 +#ifdef TK_DRAW_IN_CONTEXT
 +	if (bytesThatFit > 0) {
 +	    int tail = bytesThatFit;
 +	    while (tail < maxBytes && p[tail] != '\t' && p[tail] != '\n') {
 +		int ch, width;
-+		int length = TkUtfToUniChar(p + tail, &ch);
++		int length = TkUtfToUniChar(line + lineOffset + tail, &ch);
 +		if (length > maxBytes - tail) {
 +		    break;
 +		}
-+		TkpMeasureCharsInContext(tkfont, line, lineOffset + maxBytes,
++		TkpMeasureCharsInContext(tkfont, line, contextBytes,
 +			lineOffset + tail, length, -1, 0, &width);
 +		if (width != 0) {
 +		    break;
@@ -21,9 +152,9 @@
 +		tail += length;
 +	    }
 +	    bytesThatFit = tail;
-+	}
+@@ -7856,0 +7975 @@
 +#endif
-@@ -8406 +8425,7 @@
+@@ -8406 +8525,7 @@
 -	CharChunkMeasureChars(chunkPtr, NULL, 0, byteIndex, byteIndex+1,
 +	int unit = Tcl_NumUtfChars(ciPtr->chars, byteIndex);
 +	const char *next = Tcl_UtfAtIndex(ciPtr->chars, unit + 1);
