@@ -40,11 +40,22 @@ for (const action of ["destroy .holder", "wm withdraw .holder"]) {
     await dispatch("compositionend", "late");
     await page.locator(".x11-wasm-input").evaluate((element) => {
       const input = /** @type {HTMLTextAreaElement} */ (element);
+      const host = /** @type {any} */ (window);
+      host.lifecycleKeydowns = 0;
+      input.addEventListener("keydown", () => host.lifecycleKeydowns++);
       input.value = "n";
       input.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "n" }));
+      input.value = "u";
+      input.dispatchEvent(new InputEvent("input", { data: "u" }));
+      input.value = "g";
+      input.dispatchEvent(new Event("input"));
     });
+    await page.keyboard.insertText("i");
+    await expect(status).toHaveText("start|changed|second-key n|second-key u|second-key g|second-key i");
+    expect(await page.evaluate(() => /** @type {any} */ (window).lifecycleKeydowns)).toBe(0);
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
     await page.keyboard.type("x");
-    await expect(status).toHaveText("start|changed|second-key n|second-key x");
+    await expect(status).toHaveText("start|changed|second-key n|second-key u|second-key g|second-key i|second-key x");
     expect(errors).toEqual([]);
   });
 }
