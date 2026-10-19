@@ -1,0 +1,102 @@
+--- tkFont.c
++++ tkFont.c
+@@ -102,0 +103 @@
++    int numBytes;		/* Full browser layout context, across wrapped chunks. */
+@@ -107,0 +109,9 @@
++static int
++BrowserLayoutMeasure(TextLayout *layoutPtr, const char *start, int length,
++    int maxLength, int flags, int *widthPtr)
++{
++    return TkpMeasureCharsInContext(layoutPtr->tkfont, layoutPtr->string,
++	    layoutPtr->numBytes, (int)(start - layoutPtr->string), length,
++	    maxLength, flags, widthPtr);
++}
++
+@@ -2064,0 +2075 @@
++    layoutPtr->numBytes = (int)(endp - string);
+@@ -2101,2 +2112,19 @@
+-	    bytesThisChunk = Tk_MeasureChars(tkfont, start, special - start,
+-		    wrapLength - curX, flags, &newX);
++	    bytesThisChunk = BrowserLayoutMeasure(layoutPtr, start,
++		    special - start, wrapLength - curX, flags, &newX);
++	    if (bytesThisChunk > 0) {
++		const char *tail = start + bytesThisChunk;
++		int ch, length, width;
++		/* Zero-advance tails belong on the line of their painted scalar. */
++		while (tail < special) {
++		    length = TkUtfToUniChar(tail, &ch);
++		    if (length > special - tail) {
++			break;
++		    }
++		    BrowserLayoutMeasure(layoutPtr, tail, length, -1, 0, &width);
++		    if (width != 0) {
++			break;
++		    }
++		    tail += length;
++		    bytesThisChunk += length;
++		}
++	    }
+@@ -2178 +2206 @@
+-		bytesThisChunk = Tk_MeasureChars(tkfont, end, bytesThisChunk,
++		bytesThisChunk = BrowserLayoutMeasure(layoutPtr, end, bytesThisChunk,
+@@ -2373,2 +2401,2 @@
+-		firstByte = TkUtfAtIndex(chunkPtr->start, firstChar);
+-		Tk_MeasureChars(layoutPtr->tkfont, chunkPtr->start,
++		firstByte = Tcl_UtfAtIndex(chunkPtr->start, firstChar);
++		BrowserLayoutMeasure(layoutPtr, chunkPtr->start,
+@@ -2380 +2408 @@
+-	    lastByte = TkUtfAtIndex(chunkPtr->start, numDisplayChars);
++	    lastByte = Tcl_UtfAtIndex(chunkPtr->start, numDisplayChars);
+@@ -2381,0 +2410,2 @@
++	    BrowserLayoutMeasure(layoutPtr, layoutPtr->string,
++		    chunkPtr->start - layoutPtr->string, -1, 0, &drawX);
+@@ -2383,3 +2413,3 @@
+-		    chunkPtr->start, chunkPtr->numBytes,
+-		    firstByte - chunkPtr->start, lastByte - firstByte,
+-		    x+chunkPtr->x, y+chunkPtr->y);
++		    layoutPtr->string, layoutPtr->numBytes,
++		    firstByte - layoutPtr->string, lastByte - firstByte,
++		    x+chunkPtr->x-drawX, y+chunkPtr->y);
+@@ -2443,2 +2473,2 @@
+-		firstByte = TkUtfAtIndex(chunkPtr->start, firstChar);
+-		Tk_MeasureChars(layoutPtr->tkfont, chunkPtr->start,
++		firstByte = Tcl_UtfAtIndex(chunkPtr->start, firstChar);
++		BrowserLayoutMeasure(layoutPtr, chunkPtr->start,
+@@ -2450 +2480 @@
+-	    lastByte = TkUtfAtIndex(chunkPtr->start, numDisplayChars);
++	    lastByte = Tcl_UtfAtIndex(chunkPtr->start, numDisplayChars);
+@@ -2452,2 +2482,4 @@
+-	    dx = cosA * (chunkPtr->x) + sinA * (chunkPtr->y);
+-	    dy = -sinA * (chunkPtr->x) + cosA * (chunkPtr->y);
++	    BrowserLayoutMeasure(layoutPtr, layoutPtr->string,
++		    chunkPtr->start - layoutPtr->string, -1, 0, &drawX);
++	    dx = cosA * (chunkPtr->x-drawX) + sinA * (chunkPtr->y);
++	    dy = -sinA * (chunkPtr->x-drawX) + cosA * (chunkPtr->y);
+@@ -2456,2 +2488,2 @@
+-			layoutPtr->tkfont, chunkPtr->start, chunkPtr->numBytes,
+-			firstByte - chunkPtr->start, lastByte - firstByte,
++			layoutPtr->tkfont, layoutPtr->string, layoutPtr->numBytes,
++			firstByte - layoutPtr->string, lastByte - firstByte,
+@@ -2461,2 +2493,2 @@
+-			layoutPtr->tkfont, chunkPtr->start, chunkPtr->numBytes,
+-			firstByte - chunkPtr->start, lastByte - firstByte,
++			layoutPtr->tkfont, layoutPtr->string, layoutPtr->numBytes,
++			firstByte - layoutPtr->string, lastByte - firstByte,
+@@ -2701 +2733 @@
+-		    n = Tk_MeasureChars((Tk_Font) fontPtr, chunkPtr->start,
++		    n = BrowserLayoutMeasure(layoutPtr, chunkPtr->start,
+@@ -2808 +2840 @@
+-	    end = TkUtfAtIndex(chunkPtr->start, index);
++	    end = Tcl_UtfAtIndex(chunkPtr->start, index);
+@@ -2810 +2842 @@
+-		Tk_MeasureChars(tkfont, chunkPtr->start,
++		BrowserLayoutMeasure(layoutPtr, chunkPtr->start,
+@@ -2815,2 +2847,6 @@
+-		int ch;
+-		Tk_MeasureChars(tkfont, end, TkUtfToUniChar(end, &ch), -1, 0, &w);
++		int offset = (int)(end - chunkPtr->start);
++		int length = (int)(Tcl_UtfAtIndex(chunkPtr->start, index + 1) - end);
++		if (length > chunkPtr->numBytes - offset) {
++		    length = chunkPtr->numBytes - offset;
++		}
++		BrowserLayoutMeasure(layoutPtr, end, length, -1, 0, &w);

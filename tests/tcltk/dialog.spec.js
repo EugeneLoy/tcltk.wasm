@@ -2,6 +2,87 @@
 
 const { test, expect } = require("@playwright/test");
 
+test("actual Chrome message boxes retain activation and focus across cancel and reuse", async ({ page }) => {
+  const dialogs = [];
+  page.on("dialog", async (dialog) => {
+    dialogs.push(dialog.type());
+    if (dialog.type() === "confirm") {
+      await dialog.dismiss();
+    } else {
+      await dialog.accept();
+    }
+  });
+  await page.addInitScript(() => {
+    const target = /** @type {Window & { __dialogActivation?: boolean[] }} */ (window);
+    target.__dialogActivation = [];
+    const alert = window.alert;
+    const confirm = window.confirm;
+    window.alert = (text) => {
+      target.__dialogActivation?.push(navigator.userActivation.isActive);
+      return alert.call(window, text);
+    };
+    window.confirm = (text) => {
+      target.__dialogActivation?.push(navigator.userActivation.isActive);
+      return confirm.call(window, text);
+    };
+  });
+  const script = [
+    "entry .target",
+    "set ::calls 0",
+    "button .message -text Message -command {incr ::calls; set first [::browser::messageBox -type ok -message Alert]; set second [::browser::messageBox -type okcancel -message Confirm]; browser::setResult [list done $::calls $first $second]}",
+    "pack .target .message",
+    "bind all <KeyPress> {browser::setStatus [list key %W %K %A [focus]]}",
+    "focus -force .target",
+    "update",
+    "winfo id .message",
+  ].join("\n");
+  await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+  const id = Number.parseInt(await page.locator("#tk-browser-result").innerText(), 0);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.locator(`[data-x11-wasm-xid="${id}"]`).click();
+    await expect(page.locator("#tk-browser-result")).toHaveText(`done ${attempt} ok cancel`);
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  }
+  await page.keyboard.type("z");
+  await expect(page.locator("#tk-browser-status")).toHaveText(/key .* z z .*/);
+  expect(dialogs).toEqual(["alert", "confirm", "alert", "confirm"]);
+  expect(await page.evaluate(() => window["__dialogActivation"])).toEqual([true, true, true, true]);
+});
+
+test("actual Chrome HTML filechooser accepts empty selection then reopens", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showOpenFilePicker", { configurable: true, value: undefined });
+  });
+  const script = [
+    "entry .target",
+    "set ::calls 0",
+    "button .open -text Open -command {incr ::calls; set path [::browser::getOpenFile]; set text {}; if {$path ne {}} {set file [open $path]; set text [read $file]; close $file}; browser::setResult [join [list done $::calls $text] |]}",
+    "pack .target .open",
+    "focus -force .target",
+    "update",
+    "winfo id .open",
+  ].join("\n");
+  await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+  const id = Number.parseInt(await page.locator("#tk-browser-result").innerText(), 0);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.locator(`[data-x11-wasm-xid="${id}"]`).click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(attempt === 1 ? [] : {
+      name: "retry.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("chosen again"),
+    });
+    await expect(page.locator("#tk-browser-result")).toHaveText(
+      `done|${attempt}|${attempt === 1 ? "" : "chosen again"}`,
+    );
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+    await expect(page.locator('input[type="file"]')).toHaveCount(0);
+  }
+});
+
 async function installActivationProbe(page) {
   await page.addInitScript(() => {
     const target =

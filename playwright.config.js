@@ -1,17 +1,29 @@
 // @ts-check
 
+const path = require("node:path");
+const port = Number(process.env.PLAYWRIGHT_PORT || 8765);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PLAYWRIGHT_PORT must be an integer between 1 and 65535");
+}
+const browserDir = path.resolve(__dirname,
+    process.env.PLAYWRIGHT_BROWSER_DIR || "build/browser");
+const quotedDir = "'" + browserDir.replace(/'/g, "'\\''") + "'";
+const baseURL = `http://127.0.0.1:${port}`;
+
 /** @type {import('@playwright/test').PlaywrightTestConfig} */
 module.exports = {
     testDir: "tests/tcltk",
     timeout: 30000,
     webServer: {
-	command: "python3 -m http.server 8765 -d build/browser",
-	url: "http://127.0.0.1:8765/tcltk.html",
-	reuseExistingServer: true,
+	command: `python3 -m http.server ${port} --bind 127.0.0.1 -d ${quotedDir}`,
+	cwd: __dirname,
+	url: `${baseURL}/tcltk.html`,
+	reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === "1",
 	timeout: 120000,
     },
     use: {
-	baseURL: "http://127.0.0.1:8765",
+	baseURL,
+	channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
 	trace: "retain-on-failure",
 	screenshot: "only-on-failure",
     },
