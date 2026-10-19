@@ -63,6 +63,38 @@ test("Tk zoom synchronizes native wrapper client geometry and edge hits", async 
     committed: [240,150], pending: [240,150], css: [240,150], canvas: [240,150]});
 });
 
+test("actual browser fullscreen synchronizes native screen geometry and pointer coordinates", async ({ page }) => {
+  const script = "toplevel .nativefull; wm geometry .nativefull 240x150+31+37; bind .nativefull <Motion> {set ::nativepointer [list %X %Y %x %y %W]}; update; winfo id .nativefull";
+  await page.goto(`/tcltk.html?${new URLSearchParams({eval: script})}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok");
+  const id = Number(await page.locator("#tk-browser-result").textContent());
+  const initial = await evalWindowManager(page, "list [winfo screenwidth .nativefull] [winfo screenheight .nativefull]");
+  await page.evaluate((id) => {
+    const resource = /** @type {any} */ (window).Module.x11WasmBackend.resources.get(id);
+    const button = document.createElement("button");
+    button.textContent = "Enter native fullscreen";
+    button.onclick = () => resource.element.requestFullscreen();
+    document.body.prepend(button);
+  }, id);
+  await page.getByRole("button", {name: "Enter native fullscreen"}).click();
+  await expect.poll(() => page.evaluate(() =>
+    document.fullscreenElement?.getAttribute("data-x11-wasm-xid"))).toBe(String(id));
+  const viewport = page.viewportSize();
+  if (!viewport) throw new Error("missing fullscreen viewport");
+  const size = [viewport.width, viewport.height];
+  await expect.poll(async () => (await evalWindowManager(page, "update; list [winfo screenwidth .nativefull] [winfo screenheight .nativefull] [winfo width .nativefull] [winfo height .nativefull] [wm attributes .nativefull -fullscreen]")).split(" ").map(Number)).toEqual([...size, ...size, 1]);
+  expect(await nativeWindowGeometry(page, id)).toEqual({native: true,
+    committed: size, pending: size, css: size, canvas: size});
+  await page.mouse.move(viewport.width - 3, viewport.height - 3);
+  await expect.poll(() => evalWindowManager(page, "update; expr {[info exists ::nativepointer] ? $::nativepointer : {}}")).toBe(
+    `${viewport.width-3} ${viewport.height-3} ${viewport.width-3} ${viewport.height-3} .nativefull`);
+  expect(await evalWindowManager(page, `winfo containing ${viewport.width-3} ${viewport.height-3}`)).toBe(".nativefull");
+  await page.evaluate(() => document.exitFullscreen());
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  await expect.poll(() => evalWindowManager(page, "update; list [winfo screenwidth .nativefull] [winfo screenheight .nativefull]")).toBe(initial);
+  await expect.poll(() => evalWindowManager(page, "update; list [winfo width .nativefull] [winfo height .nativefull] [winfo rootx .nativefull] [winfo rooty .nativefull] [wm attributes .nativefull -fullscreen]")).toBe("240 150 31 37 0");
+});
+
 /**
  * @param {import("@playwright/test").Page} page
  * @param {{ rejectRequest?: boolean }=} options
