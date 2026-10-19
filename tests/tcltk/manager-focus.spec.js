@@ -72,3 +72,16 @@ test("actual Tk titlebar activation preserves editor focus and accepts text", as
   await page.keyboard.type("first");
   await expect(page.locator("#tk-browser-status")).toHaveText("typed .first.editor first second");
 });
+
+test("actual Tk background close refusal preserves the current editor focus", async ({ page }) => {
+  const { frame, secondEditor } = await openActualTkManager(page);
+  await page.locator(`[data-x11-wasm-xid="${secondEditor}"]`).click({ position: { x: 10, y: 10 } });
+  await page.keyboard.type("keep");
+  await expect(page.locator("#tk-browser-status")).toHaveText("typed .second.editor {} keep");
+  await page.locator(`[data-x11-wasm-frame="${frame}"] [data-x11-wasm-decoration="close"]`).click();
+  await expect(page.locator("#tk-browser-status")).toHaveText("refused 1 1");
+  await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  await expect(page.locator(".x11-wasm-input")).toHaveAttribute("data-x11-wasm-focus-window", String(secondEditor));
+  await page.keyboard.type("typing");
+  await expect(page.locator("#tk-browser-status")).toHaveText("typed .second.editor {} keeptyping");
+});
