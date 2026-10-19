@@ -48,3 +48,52 @@ for (const action of ["destroy .holder", "wm withdraw .holder"]) {
     expect(errors).toEqual([]);
   });
 }
+
+for (const action of ["pointercancel", "lostpointercapture", "blur"]) {
+  test(`Tk implicit pointer capture retires on ${action}`, async ({ page }) => {
+    const script = [
+      "frame .first -width 100 -height 60",
+      "frame .second -width 100 -height 60",
+      "pack .first .second -side left",
+      "bind .first <ButtonPress-1> {browser::setStatus pressed}",
+      "bind .second <Motion> {browser::setStatus [list outside %s]}",
+      "bind .second <ButtonPress-1> {browser::setStatus resumed}",
+      "update",
+      "list ready [winfo id .first] [winfo id .second]",
+    ].join("\n");
+    await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+    await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+    const ready = ((await page.locator("#tk-browser-result").textContent()) || "").trim().split(/\s+/);
+    const first = page.locator(`[data-x11-wasm-xid="${Number(ready[1])}"]`);
+    const second = page.locator(`[data-x11-wasm-xid="${Number(ready[2])}"]`);
+    await first.hover({ position: { x: 10, y: 10 } });
+    await page.mouse.down();
+    await expect(page.locator("#tk-browser-status")).toHaveText("pressed");
+    await page.mouse.move((await first.boundingBox()).x + 11, (await first.boundingBox()).y + 10);
+    try {
+      const before = await page.evaluate((action) => {
+        const backend = /** @type {any} */ (window).Module.x11WasmBackend;
+        const before = backend.pointerCaptureWindow;
+        const pointerId = backend.capturedPointerId;
+        if (action === "blur") window.dispatchEvent(new Event("blur"));
+        else if (action === "lostpointercapture") backend.rootElement.releasePointerCapture(pointerId);
+        else backend.rootElement.dispatchEvent(new PointerEvent("pointercancel", { pointerId }));
+        return before;
+      }, action);
+      expect(before).toBe(Number(ready[1]));
+      const box = await second.boundingBox();
+      await page.mouse.move(box.x + 10, box.y + 10);
+      await expect.poll(() => page.evaluate(() => {
+        const backend = /** @type {any} */ (window).Module.x11WasmBackend;
+        return backend.pointerCaptureWindow;
+      })).toBe(0);
+      await page.mouse.up();
+      await page.mouse.move(box.x + 11, box.y + 10);
+      await expect(page.locator("#tk-browser-status")).toHaveText("outside 0");
+      await second.click({ position: { x: 10, y: 10 } });
+      await expect(page.locator("#tk-browser-status")).toHaveText("resumed");
+    } finally {
+      await page.mouse.up();
+    }
+  });
+}
