@@ -831,7 +831,7 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 		    return unsupported();
 		}
 	    } else if (typeof document !== "undefined") {
-		entries = await new Promise((resolve) => {
+		entries = await new Promise((resolve, reject) => {
 		    const input = document.createElement("input");
 		    let settled = false;
 		    input.type = "file";
@@ -860,7 +860,12 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 			resolve([]);
 		    }, { once: true });
 		    document.body.appendChild(input);
-		    input.click();
+		    try {
+			input.click();
+		    } catch (error) {
+			input.remove();
+			reject(error);
+		    }
 		});
 	    } else {
 		return unsupported();
@@ -1359,7 +1364,7 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 	    if (!hasUserActivation()) {
 		return unsupported();
 	    }
-	    value = await new Promise((resolve) => {
+	    value = await new Promise((resolve, reject) => {
 		const input = document.createElement("input");
 		let settled = false;
 		input.type = "file";
@@ -1386,7 +1391,12 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 		    resolve(null);
 		}, { once: true });
 		document.body.appendChild(input);
-		input.click();
+		try {
+		    input.click();
+		} catch (error) {
+		    input.remove();
+		    reject(error);
+		}
 	    });
 	    if (!value) {
 		return allocateString("");
@@ -1458,7 +1468,7 @@ EM_ASYNC_JS(char *, BrowserChooseColor, (
 	if (!hasUserActivation()) {
 	    return unsupported();
 	}
-	const value = await new Promise((resolve) => {
+	const value = await new Promise((resolve, reject) => {
 	    const input = document.createElement("input");
 	    let settled = false;
 	    input.type = "color";
@@ -1479,7 +1489,12 @@ EM_ASYNC_JS(char *, BrowserChooseColor, (
 	    input.addEventListener("change", () => finish(input.value), { once: true });
 	    input.addEventListener("cancel", () => finish(""), { once: true });
 	    document.body.appendChild(input);
-	    input.click();
+	    try {
+		input.click();
+	    } catch (error) {
+		input.remove();
+		reject(error);
+	    }
 	});
 	return allocateString(value);
     } catch (error) {
