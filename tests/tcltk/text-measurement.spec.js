@@ -2,7 +2,7 @@
 
 const { test, expect } = require("@playwright/test");
 const {
-  openTextPage, evalText, drawnTextRun, pixelBounds,
+  openTextPage, evalText, drawnTextRun, pixelBounds, measureTextProbe,
 } = require("../support/text-oracle");
 
 const clusters = [
@@ -102,5 +102,31 @@ for (const [name, prefix] of clusters) {
         previous = x;
       }
     }
+  });
+}
+
+for (const [name, prefix] of [["ZWSP", "\u200b"], ["ZWJ", "\u200d"]]) {
+  test(`Tk preserves a legitimate zero advance for ${name}`, async ({ page }) => {
+    const measured = Number(await openTextPage(page, [
+      `set prefix {${prefix}}`,
+      "foreach c {.c .reference} {canvas $c -width 120 -height 70 -background white -highlightthickness 0; pack $c}",
+      ".c create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      ".reference create text 12 35 -anchor w -text | -font {Helvetica -32}",
+      "update",
+      "font measure {Helvetica -32} $prefix",
+    ].join("\n")));
+    const run = await drawnTextRun(page, prefix);
+    expect(run.advance, "the marker is painted at the original x").toBe(0);
+    const images = await page.locator("[data-x11-wasm-xid] > canvas").evaluateAll((canvases) => {
+      window.Module.x11WasmBackend.flush();
+      return canvases.filter((canvas) => canvas.width === 120 && canvas.height === 70)
+        .map((canvas) => Array.from(canvas.getContext("2d").getImageData(0, 0, 120, 70).data));
+    });
+    expect(images).toHaveLength(2);
+    expect(images[0].filter((value, index) => index % 4 !== 3 && value < 80).length)
+      .toBeGreaterThan(20);
+    expect(images[0], "zero-width text must not displace or add painted pixels")
+      .toEqual(images[1]);
+    expect(measured, "zero is a valid width, not an unavailable-backend signal").toBe(0);
   });
 }
