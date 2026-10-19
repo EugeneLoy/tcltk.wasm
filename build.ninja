@@ -113,7 +113,7 @@ build $tk_overlay_generic_stamp: overlay_tk_generic build.ninja browser/tk/gener
 build $tk_build/Makefile: configure_tk $tcl_build/.built build.ninja $configure_tools/uname
 build $tk_build/.built: build_tk $tk_build/Makefile $tk_overlay_unix_stamp $tk_overlay_generic_stamp $x11_src/include/X11/Xlib.h $x11_src/include/X11/XlibWasm.h $x11_src/include/X11/Xutil.h $x11_src/include/X11/extensions/scrnsaver.h
 build build/compile_commands.json: compile_commands tools/gen_compile_commands.py build.ninja $x11_src/ninja/x11wasm.ninja $tcl_build/Makefile $tk_build/Makefile $tcl_overlay_unix_stamp $tk_overlay_unix_stamp $tk_overlay_generic_stamp
-build build/typecheck-js.stamp: typecheck_js tsconfig.json $x11wasm_js_pre $x11wasm_js_library $x11wasm_js_types
+build build/typecheck-js.stamp: typecheck_js tsconfig.json $x11wasm_js_pre $x11wasm_js_library $x11wasm_js_types tests/types/node.d.ts tests/support/tcltk.js tests/tcltk/manager-integration.spec.js
 build $browser_build/main.o: compile_browser_app browser/app/main.c build.ninja $tk_overlay_unix_stamp $tk_overlay_generic_stamp
 build $browser_manager_focus: x11wasm_compile_c $x11_src/test/browser/manager-focus.c | $x11wasm_xlib_common_deps
 build $browser_dist/tcltk.html: link_browser_app $browser_build/main.o $browser_manager_focus $x11_lib $tk_build/.built $tcl_build/.built build/typecheck-js.stamp browser/app/shell.html $x11wasm_js_pre $x11wasm_js_library

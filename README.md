@@ -19,6 +19,26 @@ directory. The wrapper preserves the Chrome PID, arguments, and CDP pipes.
 Set `PLAYWRIGHT_CHROME_EXECUTABLE` only when installed Chrome is at a custom
 absolute path. Without `PLAYWRIGHT_CHROME_STDIO_DIR`, launch behavior is unchanged.
 
+## Browser Sample
+
+After `ninja -f build.ninja browser`, run
+`python3 browser/app/server.py --port 8766` and open
+`http://127.0.0.1:8766/app.html`. The Tcl shell, User Window, IME fields,
+and native dialog checks remain available in the sample.
+
+The sample opts into the browser window manager before runtime startup.
+Use the **Window manager** checkbox to enable or disable its decorations.
+**WM sample** opens normal, dialog, utility, transient grid, and undecorated
+popup windows. The normal window has min/max and aspect constraints, the
+dialog is fixed size, and the utility resizes horizontally. **Allow close**
+controls the sample's `WM_DELETE_WINDOW` handler. Reopening **WM sample**
+resets its windows. The library itself keeps the manager disabled by default.
+
+The initial IME client fits the sample work area. Its form reflows on narrow
+screens, with a native vertical scrollbar for the remaining checks and a
+horizontal scrollbar for the text-drawing canvas. These layout choices apply
+only to the sample, not to arbitrary application windows.
+
 ## License
 
 Original project code is licensed under the [MIT License](LICENSE). The
