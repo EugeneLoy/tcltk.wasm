@@ -38,7 +38,7 @@ async function evalText(page, script) {
     const bytes = new TextEncoder().encode(`${source}\0`);
     const pointer = module._malloc(bytes.length);
     try {
-      module.HEAPU8.set(bytes, pointer);
+      window.HEAPU8.set(bytes, pointer);
       return module._TkBrowserEval(pointer);
     } finally {
       module._free(pointer);
@@ -120,7 +120,7 @@ async function measureTextProbe(page, requests) {
       const bytes = new TextEncoder().encode(`${value}\0`);
       const pointer = module._malloc(bytes.length);
       pointers.push(pointer);
-      module.HEAPU8.set(bytes, pointer);
+      window.HEAPU8.set(bytes, pointer);
       return pointer;
     };
     const font = copy("Helvetica -32");

@@ -130,3 +130,133 @@ for (const [name, prefix] of [["ZWSP", "\u200b"], ["ZWJ", "\u200d"]]) {
     expect(measured, "zero is a valid width, not an unavailable-backend signal").toBe(0);
   });
 }
+
+test("Tk_MeasureChars retains ASCII flags and byte-limited context ranges", async ({ page }) => {
+  await openTextPage(page, [
+    "set value {ab cd}",
+    "set context XX${value}TAIL",
+    "set empty {}",
+    "canvas .c -width 300 -height 70 -background white -highlightthickness 0",
+    "pack .c",
+    ".c create text 12 35 -anchor w -text ${value}| -font {Helvetica -32}",
+    "update",
+  ].join("\n"));
+  const run = await drawnTextRun(page, "ab cd");
+  expect(run.glyphs.map((glyph) => glyph.text)).toEqual(Array.from("ab cd"));
+  const positions = [...run.glyphs.map((glyph) => glyph.x), run.advance];
+  const cases = [];
+  const expected = [];
+  for (let flags = 0; flags < 8; flags++) {
+    const whole = Boolean(flags & 1), least = Boolean(flags & 2), partial = Boolean(flags & 4);
+    const limits = [
+      [-7, 5],
+      [0, least ? 1 : 0],
+      [1, least || (!whole && partial) ? 1 : 0],
+      [positions[1], whole && !least ? 0 : 1],
+      [positions[2], 2],
+      [positions[3] + 1, whole ? 2 : partial ? 4 : 3],
+      [run.advance - 1, partial ? 5 : whole ? 2 : 4],
+      [run.advance, 5],
+    ];
+    for (const [max, count] of limits) {
+      for (const context of [false, true]) {
+        cases.push({ variable: context ? "context" : "value", start: context ? 2 : 0,
+          length: 5, max, flags, context });
+        expected.push([count, positions[count], context ? 11 : 5]);
+      }
+    }
+    for (const max of [-1, 0, 1]) {
+      cases.push({ variable: "empty", max, flags });
+      expected.push([0, 0, 0]);
+    }
+  }
+  const results = await measureTextProbe(page, cases);
+  results.forEach((result, index) => {
+    expect(result, JSON.stringify(cases[index])).toEqual(expected[index]);
+  });
+});
+
+for (const [name, prefix] of clusters) {
+  for (const representation of ["literal", "Tcl Unicode"]) {
+    test(`Tk native ${name} byte returns preserve ${representation} source`, async ({ page }) => {
+      const codeUnits = Array.from({ length: prefix.length }, (_, index) =>
+        prefix.charCodeAt(index));
+      const source = representation === "literal"
+        ? `set prefix {${prefix}}`
+        : `set prefix [format ${"%c".repeat(codeUnits.length)} ${codeUnits.join(" ")}]`;
+      const [prefixBytes, firstBytes, sourceBytes, indices] = (await openTextPage(page, [
+        source,
+        "set n [string length $prefix]",
+        "set value ${prefix}Q",
+        // string bytelength, not encoding convertto, describes the native source.
+        `set first [string range $prefix 0 ${prefix.codePointAt(0) > 0xffff ? 1 : 0}]`,
+        "canvas .c -width 300 -height 70 -background white -highlightthickness 0",
+        "pack .c",
+        `.c create text 12 35 -anchor w -text {${prefix}|} -font {Helvetica -32}`,
+        "update",
+        "join [list [string bytelength $prefix] [string bytelength $first] [string bytelength $value] $n] |",
+      ].join("\n"))).split("|").map(Number);
+      const run = await drawnTextRun(page, prefix);
+      expect(indices).toBe(prefix.length);
+      // A literal can retain canonical four-byte UTF-8, while Tcl string
+      // operations can materialize six-byte surrogate pairs. Inspect this
+      // actual source rather than assuming Buffer.byteLength describes it.
+      const firstScalarBytes = prefix.codePointAt(0) > 0xffff && representation === "literal"
+        ? (prefixBytes - Buffer.byteLength(prefix) === 0 ? 4 : firstBytes)
+        : firstBytes;
+      const requests = [];
+      const expected = [];
+      for (let flags = 0; flags < 8; flags++) {
+        const whole = Boolean(flags & 1), least = Boolean(flags & 2), partial = Boolean(flags & 4);
+        for (const context of [false, true]) {
+          for (const [max, bytes, width] of [
+            [0, least ? firstScalarBytes : 0, least ? run.advance : 0],
+            [run.advance - 1, least || (!whole && partial) ? firstScalarBytes : 0,
+              least || (!whole && partial) ? run.advance : 0],
+            [run.advance, whole && !least ? 0 : prefixBytes,
+              whole && !least ? 0 : run.advance],
+          ]) {
+            requests.push({ max, flags, context });
+            expected.push([bytes, width, sourceBytes]);
+          }
+          requests.push({ length: prefixBytes, max: -7, flags, context });
+          expected.push([prefixBytes, run.advance, sourceBytes]);
+        }
+        // The tail of an intact grapheme has zero advance in full context.
+        requests.push({ start: firstScalarBytes, length: prefixBytes - firstScalarBytes,
+          max: -1, flags, context: true });
+        expected.push([prefixBytes - firstScalarBytes, 0, sourceBytes]);
+      }
+      const results = await measureTextProbe(page, requests);
+      results.forEach((result, index) => {
+        expect(result, JSON.stringify(requests[index])).toEqual(expected[index]);
+      });
+    });
+  }
+}
+
+test("Tk native byte ranges retain embedded modified UTF-8 NUL", async ({ page }) => {
+  const bytes = Number(await openTextPage(page, [
+    "set value [format A%cB 0]",
+    "string bytelength $value",
+  ].join("\n")));
+  expect(bytes).toBe(4);
+  const requests = [];
+  for (let flags = 0; flags < 8; flags++) {
+    for (const context of [false, true]) {
+      for (const [start, length] of [[0, 4], [0, 3], [1, 2], [3, 1], [4, 0], [0, 1]]) {
+        requests.push({ start, length, max: -1, flags, context });
+      }
+    }
+  }
+  const results = await measureTextProbe(page, requests);
+  results.forEach(([count, width, total], index) => {
+    expect(count, JSON.stringify(requests[index])).toBe(requests[index].length);
+    expect(total).toBe(4);
+    expect(width).toBeGreaterThanOrEqual(0);
+    if (count === 0) expect(width).toBe(0);
+  });
+  const whole = results[0][1];
+  expect(whole, "bytes after NUL must still be measured").toBeGreaterThan(results[1][1]);
+  expect(whole).toBe(results[5][1] + results[2][1] + results[3][1]);
+});
