@@ -15,6 +15,9 @@
 #include <tk.h>
 
 extern int TkBrowserServiceXEvents(void);
+extern int TkpMeasureCharsInContext(Tk_Font tkfont, const char *source,
+	int numBytes, int rangeStart, int rangeLength, int maxLength, int flags,
+	int *lengthPtr);
 
 static Tcl_Interp *browserInterp;
 
@@ -300,6 +303,58 @@ TclBrowserTestClockClicksUsesWideTime(void)
 	return 0;
     }
     return clicks == (Tcl_WideInt)5000123456LL;
+}
+
+/* Keep the probe byte-oriented, including Tcl's modified UTF-8 strings. */
+EMSCRIPTEN_KEEPALIVE int
+TkBrowserTestMeasureChars(
+    const char *fontName,
+    const char *variable,
+    int rangeStart,
+    int rangeLength,
+    int maxLength,
+    int flags,
+    int inContext)
+{
+    Tcl_Obj *sourceObj, *result[3];
+    Tk_Font font;
+    const char *source;
+    int numBytes, count, width;
+
+    if (browserInterp == NULL) {
+	return TCL_ERROR;
+    }
+    sourceObj = Tcl_GetVar2Ex(browserInterp, variable, NULL,
+	    TCL_GLOBAL_ONLY | TCL_LEAVE_ERR_MSG);
+    if (sourceObj == NULL) {
+	return TCL_ERROR;
+    }
+    source = Tcl_GetStringFromObj(sourceObj, &numBytes);
+    if (rangeLength == -1) {
+	rangeLength = numBytes - rangeStart;
+    }
+    if ((rangeStart < 0) || (rangeStart > numBytes) || (rangeLength < 0)
+	    || (rangeLength > numBytes - rangeStart)) {
+	return TCL_ERROR;
+    }
+    font = Tk_GetFont(browserInterp, Tk_MainWindow(browserInterp), fontName);
+    if (font == NULL) {
+	return TCL_ERROR;
+    }
+    if (inContext) {
+	count = TkpMeasureCharsInContext(font, source, numBytes, rangeStart,
+		rangeLength, maxLength, flags, &width);
+    } else {
+	count = Tk_MeasureChars(font, source + rangeStart, rangeLength,
+		maxLength, flags, &width);
+    }
+    Tk_FreeFont(font);
+    result[0] = Tcl_NewIntObj(count);
+    result[1] = Tcl_NewIntObj(width);
+    result[2] = Tcl_NewIntObj(numBytes);
+    Tcl_SetObjResult(browserInterp, Tcl_NewListObj(3, result));
+    BrowserSetResultObj(TCL_OK, Tcl_GetObjResult(browserInterp));
+    return TCL_OK;
 }
 
 static int
@@ -831,7 +886,7 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 		    return unsupported();
 		}
 	    } else if (typeof document !== "undefined") {
-		entries = await new Promise((resolve) => {
+		entries = await new Promise((resolve, reject) => {
 		    const input = document.createElement("input");
 		    let settled = false;
 		    input.type = "file";
@@ -860,7 +915,12 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 			resolve([]);
 		    }, { once: true });
 		    document.body.appendChild(input);
-		    input.click();
+		    try {
+			input.click();
+		    } catch (error) {
+			input.remove();
+			reject(error);
+		    }
 		});
 	    } else {
 		return unsupported();
@@ -873,6 +933,11 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 	return allocateString(paths.join("\n"));
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1212,6 +1277,11 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 	return allocateString(path);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1359,7 +1429,7 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 	    if (!hasUserActivation()) {
 		return unsupported();
 	    }
-	    value = await new Promise((resolve) => {
+	    value = await new Promise((resolve, reject) => {
 		const input = document.createElement("input");
 		let settled = false;
 		input.type = "file";
@@ -1386,7 +1456,12 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 		    resolve(null);
 		}, { once: true });
 		document.body.appendChild(input);
-		input.click();
+		try {
+		    input.click();
+		} catch (error) {
+		    input.remove();
+		    reject(error);
+		}
 	    });
 	    if (!value) {
 		return allocateString("");
@@ -1409,6 +1484,11 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 	return allocateString(path);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1458,7 +1538,7 @@ EM_ASYNC_JS(char *, BrowserChooseColor, (
 	if (!hasUserActivation()) {
 	    return unsupported();
 	}
-	const value = await new Promise((resolve) => {
+	const value = await new Promise((resolve, reject) => {
 	    const input = document.createElement("input");
 	    let settled = false;
 	    input.type = "color";
@@ -1479,11 +1559,21 @@ EM_ASYNC_JS(char *, BrowserChooseColor, (
 	    input.addEventListener("change", () => finish(input.value), { once: true });
 	    input.addEventListener("cancel", () => finish(""), { once: true });
 	    document.body.appendChild(input);
-	    input.click();
+	    try {
+		input.click();
+	    } catch (error) {
+		input.remove();
+		reject(error);
+	    }
 	});
 	return allocateString(value);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
