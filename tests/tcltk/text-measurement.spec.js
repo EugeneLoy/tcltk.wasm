@@ -11,6 +11,8 @@ const clusters = [
   ["ZWJ emoji", "\ud83d\udc69\u200d\ud83d\udcbb"],
 ];
 
+test.use({ deviceScaleFactor: 1 });
+
 test("text oracle waits for asynchronous update and propagates Tcl errors", async ({ page }) => {
   await openTextPage(page, "set oracleState ready");
   for (let serial = 1; serial <= 3; serial++) {
@@ -296,8 +298,13 @@ for (const [name, prefix] of clusters) {
       "winfo id .glyph",
     ].join("\n")));
     const run = await drawnTextRun(page, prefix);
-    const glyphPixels = (await pixelBounds(page, glyphId, "nonwhite")).count;
+    const glyph = await pixelBounds(page, glyphId, "nonwhite");
+    const glyphPixels = glyph.count;
     expect(glyphPixels, "independent complete-glyph reference is nonblank").toBeGreaterThan(20);
+    expect(glyph.left, "reference has no left overhang").toBeGreaterThanOrEqual(12);
+    expect(glyph.right, "adjacent glyphs cannot overlap").toBeLessThan(12 + run.advance);
+    const lineHeight = Number(await evalText(page, "font metrics {Helvetica -32} -linespace"));
+    expect(glyph.bottom - glyph.top + 1).toBeLessThanOrEqual(lineHeight);
     for (const width of [run.advance * 2, run.advance - 1, 1]) {
       await page.evaluate(() => { window.__textOracle.fills.length = 0; });
       const values = (await evalText(page, [
@@ -321,6 +328,8 @@ for (const [name, prefix] of clusters) {
           .map((fill) => [JSON.stringify(fill), fill])).values());
       });
       const complex = fills.filter((fill) => fill.font.startsWith("32px "));
+      expect(complex.every((fill) => Number.isInteger(fill.x) && Number.isInteger(fill.y)),
+        "reference and wrapped glyph origins stay on integer pixels").toBe(true);
       expect(complex.length, `width=${width}: a nonempty scene is required`)
         .toBeGreaterThanOrEqual(3);
       expect(complex.map((fill) => fill.text), `width=${width}: no re-shaped tail glyphs`)
