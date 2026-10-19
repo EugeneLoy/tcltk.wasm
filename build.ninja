@@ -77,7 +77,8 @@ rule compile_browser_app
   description = compile browser app
 
 rule link_browser_app
-  command = root=$$(pwd) && mkdir -p "$$root/$browser_dist" "$$root/$emcache" && EM_CACHE="$$root/$emcache" emcc "$$root/$browser_build/main.o" "$$root/$x11_lib" "$$root/$tk_build/libtk8.6.a" "$$root/$tcl_build/libtcl8.6.a" --js-library "$$root/$x11wasm_js_library" --pre-js "$$root/$x11wasm_js_pre" --shell-file "$$root/browser/app/shell.html" --preload-file "$$root/$tcl_src/library@/lib/tcl8.6" --preload-file "$$root/$tk_src/library@/lib/tk8.6" -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -o "$$root/$browser_dist/tcltk.html"
+  # Tk selection callbacks can exceed Emscripten's default 4 KiB unwind stack.
+  command = root=$$(pwd) && mkdir -p "$$root/$browser_dist" "$$root/$emcache" && EM_CACHE="$$root/$emcache" emcc "$$root/$browser_build/main.o" "$$root/$x11_lib" "$$root/$tk_build/libtk8.6.a" "$$root/$tcl_build/libtcl8.6.a" --js-library "$$root/$x11wasm_js_library" --pre-js "$$root/$x11wasm_js_pre" --shell-file "$$root/browser/app/shell.html" --preload-file "$$root/$tcl_src/library@/lib/tcl8.6" --preload-file "$$root/$tk_src/library@/lib/tk8.6" -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1 -sASYNCIFY_STACK_SIZE=8192 -sEXIT_RUNTIME=0 -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORTED_FUNCTIONS=_main,_malloc,_free -o "$$root/$browser_dist/tcltk.html"
   description = link browser app
 
 rule stage_browser_licenses

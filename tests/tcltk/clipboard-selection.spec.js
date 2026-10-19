@@ -2,6 +2,87 @@
 
 const { test, expect } = require("@playwright/test");
 
+test("mock clipboard denial preserves local selection and allows a later write", async ({ page }) => {
+  await page.addInitScript(() => {
+    let calls = 0;
+    const writes = window["__clipboardWrites"] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text) => {
+        writes.push(text);
+        calls++;
+        if (calls <= 2) {
+          return Promise.reject(new DOMException("permission denied", "NotAllowedError"));
+        }
+        return Promise.resolve();
+      } },
+    });
+  });
+  const script = [
+    "entry .target",
+    "clipboard clear",
+    "clipboard append local",
+    "update",
+    "set ::calls 0",
+    "button .retry -text Retry -command {incr ::calls; set code [catch {clipboard clear; clipboard append recovered-$::calls; update; clipboard get} value]; browser::setResult [list retry $code $value]}",
+    "pack .target .retry",
+    "bind all <KeyPress> {browser::setResult [list typed %A]}",
+    "focus -force .target",
+    "update",
+    "list [winfo id .retry] [clipboard get]",
+  ].join("\n");
+  await page.goto(`/tcltk.html?${new URLSearchParams({ eval: script })}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+  const [id, local] = (await page.locator("#tk-browser-result").innerText()).split(" ");
+  expect(local).toBe("local");
+  await expect.poll(() => page.evaluate(() => window["Module"].x11WasmBackend.clipboardWriteStatus)).toBe("failed");
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await page.locator(`[data-x11-wasm-xid="${Number.parseInt(id, 0)}"]`).click();
+    await expect(page.locator("#tk-browser-result")).toHaveText(`retry 0 recovered-${attempt}`);
+    await expect.poll(() => page.evaluate(() => window["Module"].x11WasmBackend.clipboardWriteStatus)).toBe("written");
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  }
+  expect(await page.evaluate(() => window["__clipboardWrites"])).toEqual([
+    "", "local", "", "recovered-1", "", "recovered-2",
+  ]);
+  await page.keyboard.type("z");
+  await expect(page.locator("#tk-browser-result")).toHaveText("typed z");
+  expect(await page.evaluate(() => window["Module"].x11WasmBackend.userActivationServiceError || "")).toBe("");
+});
+
+for (const obsoleteResult of ["resolve", "reject"]) {
+  test(`mock clipboard same-text retry ignores obsolete ${obsoleteResult}`, async ({ page }) => {
+    await page.goto(`/tcltk.html?${new URLSearchParams({ eval: "list ready" })}`);
+    await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", { timeout: 15000 });
+    const result = await page.evaluate(async (obsoleteResult) => {
+      const backend = window["Module"].x11WasmBackend;
+      const pending = [];
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) },
+      });
+      backend.setClipboardText("same text");
+      backend.setClipboardText("same text");
+      if (obsoleteResult === "reject") {
+        pending[1].resolve();
+      } else {
+        pending[1].reject(new DOMException("current denial", "NotAllowedError"));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const current = { status: backend.clipboardWriteStatus, error: backend.clipboardWriteError };
+      if (obsoleteResult === "reject") {
+        pending[0].reject(new DOMException("obsolete denial", "NotAllowedError"));
+      } else {
+        pending[0].resolve();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { current, final: { status: backend.clipboardWriteStatus, error: backend.clipboardWriteError } };
+    }, obsoleteResult);
+    expect(result.final).toEqual(result.current);
+    expect(result.final.status).toBe(obsoleteResult === "reject" ? "written" : "failed");
+  });
+}
+
 test("Tk clipboard selection roundtrips inside the browser port", async ({
   page,
 }) => {
