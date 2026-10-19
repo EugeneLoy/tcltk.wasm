@@ -1,0 +1,34 @@
+--- tkTextDisp.c
++++ tkTextDisp.c
+@@ -7850 +7850 @@
+-		    lineOffset+chLen, lineOffset, -1, chunkPtr->x, -1, 0,
++		    lineOffset+maxBytes, lineOffset, lineOffset+chLen, chunkPtr->x, -1, 0,
+@@ -7856,0 +7857,19 @@
++#ifdef TK_DRAW_IN_CONTEXT
++	if (bytesThatFit > 0) {
++	    int tail = bytesThatFit;
++	    while (tail < maxBytes && p[tail] != '\t' && p[tail] != '\n') {
++		int ch, width;
++		int length = TkUtfToUniChar(p + tail, &ch);
++		if (length > maxBytes - tail) {
++		    break;
++		}
++		TkpMeasureCharsInContext(tkfont, line, lineOffset + maxBytes,
++			lineOffset + tail, length, -1, 0, &width);
++		if (width != 0) {
++		    break;
++		}
++		tail += length;
++	    }
++	    bytesThatFit = tail;
++	}
++#endif
+@@ -8406 +8425,7 @@
+-	CharChunkMeasureChars(chunkPtr, NULL, 0, byteIndex, byteIndex+1,
++	int unit = Tcl_NumUtfChars(ciPtr->chars, byteIndex);
++	const char *next = Tcl_UtfAtIndex(ciPtr->chars, unit + 1);
++	int limit = (int)(next - ciPtr->chars);
++	if (limit > ciPtr->numBytes) {
++	    limit = ciPtr->numBytes;
++	}
++	CharChunkMeasureChars(chunkPtr, NULL, 0, byteIndex, limit,
