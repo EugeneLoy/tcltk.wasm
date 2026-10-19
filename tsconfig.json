@@ -11,6 +11,8 @@
   },
   "include": [
     "third-party/x11.wasm/js/**/*.js",
-    "third-party/x11.wasm/js/**/*.d.ts"
+    "third-party/x11.wasm/js/**/*.d.ts",
+    "tests/types/node.d.ts",
+    "tests/tcltk/manager-integration.spec.js"
   ]
 }

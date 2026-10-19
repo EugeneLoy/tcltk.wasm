@@ -26,6 +26,7 @@
     body {
       display: grid;
       grid-template-rows: 44px minmax(0, 1fr);
+      height: 100vh;
       min-height: 100vh;
     }
 
@@ -79,6 +80,29 @@
       color: #24292f;
       font-size: 13px;
       font-weight: 650;
+    }
+
+    .window-title,
+    .window-controls {
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .window-title {
+      padding-top: 6px;
+      padding-bottom: 6px;
+    }
+
+    .window-controls,
+    .manager-option {
+      display: flex;
+      align-items: center;
+    }
+
+    .manager-option {
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 400;
     }
 
     .shell-body {
@@ -193,10 +217,15 @@
     @media (max-width: 920px) {
       body {
         grid-template-rows: 44px auto;
+        height: auto;
       }
 
       main {
         grid-template-columns: 1fr;
+      }
+
+      .shell-body {
+        grid-template-rows: 180px auto auto;
       }
 
       #tk-browser-root {
@@ -235,7 +264,13 @@ list ok [winfo children .]</textarea>
       </div>
     </section>
     <section aria-label="User Window">
-      <div class="panel-title">User Window</div>
+      <div class="panel-title window-title">
+        <span>User Window</span>
+        <div class="window-controls">
+          <label class="manager-option"><input id="tk-window-manager" type="checkbox" checked disabled>Window manager</label>
+          <button id="tcl-wm-sample" type="button" disabled>WM sample</button>
+        </div>
+      </div>
       <div class="window-body">
         <div id="tk-browser-root"></div>
       </div>
@@ -290,6 +325,8 @@ list ok [winfo children .]</textarea>
       const runButton = document.getElementById("tcl-run");
       const demoButton = document.getElementById("tcl-demo");
       const clearButton = document.getElementById("tcl-clear");
+      const managerToggle = document.getElementById("tk-window-manager");
+      const managerSampleButton = document.getElementById("tcl-wm-sample");
       let runtimeReady = false;
       let evaluationPending = false;
       let history = [];
@@ -318,12 +355,20 @@ list ok [winfo children .]</textarea>
         if (demoButton) {
           demoButton.disabled = !enabled || evaluationPending;
         }
+        if (managerSampleButton) {
+          managerSampleButton.disabled = !enabled || evaluationPending;
+        }
       }
 
       function initialTkScript() {
+        const root = document.getElementById("tk-browser-root");
+        const width = Math.max(1, (root?.clientWidth || 640) - 8);
+        const height = Math.max(1, (root?.clientHeight || 560) - 68);
         return [
           "wm title . {User Window - IME Sample}",
-          "catch {destroy .root}",
+          `wm geometry . ${width}x${height}+4+32`,
+          "catch {destroy .imeViewport}",
+          "catch {destroy .imeScroll}",
           "namespace eval ::imeSample {}",
           "proc ::imeSample::value {widget} {",
           "    if {![winfo exists $widget]} {return {}}",
@@ -341,27 +386,27 @@ list ok [winfo children .]</textarea>
           "    set value [::imeSample::value $widget]",
           "    set cursor [::imeSample::cursor $widget]",
           "    set summary [list $event $widget cursor $cursor detail $detail value $value]",
-          "    if {[winfo exists .root.status.value]} {.root.status.value configure -text $summary}",
+          "    if {[winfo exists .imeViewport.content.status.value]} {.imeViewport.content.status.value configure -text $summary}",
           "    browser::setResult $summary",
           "}",
           "proc ::imeSample::report {} {",
-          "    set values [list entry [.root.form.entry get] initial [.root.form.initial get] text [.root.form.text get 1.0 {end-1c}] spinbox [.root.form.spin get] password [.root.form.password get]]",
+          "    set values [list entry [.imeViewport.content.form.entry get] initial [.imeViewport.content.form.initial get] text [.imeViewport.content.form.text get 1.0 {end-1c}] spinbox [.imeViewport.content.form.spin get] password [.imeViewport.content.form.password get]]",
           "    browser::setResult $values",
-          "    if {[winfo exists .root.status.value]} {.root.status.value configure -text $values}",
+          "    if {[winfo exists .imeViewport.content.status.value]} {.imeViewport.content.status.value configure -text $values}",
           "}",
           "proc ::imeSample::clear {} {",
-          "    foreach widget {.root.form.entry .root.form.initial .root.form.password} {$widget delete 0 end}",
-          "    .root.form.text delete 1.0 end",
-          "    .root.form.spin delete 0 end",
+          "    foreach widget {.imeViewport.content.form.entry .imeViewport.content.form.initial .imeViewport.content.form.password} {$widget delete 0 end}",
+          "    .imeViewport.content.form.text delete 1.0 end",
+          "    .imeViewport.content.form.spin delete 0 end",
           "    browser::setResult {cleared}",
           "}",
           "proc ::imeSample::shortcutSummary {source action widget} {",
-          "    set values [list entry [.root.form.entry get] initial [.root.form.initial get] text [.root.form.text get 1.0 {end-1c}] spinbox [.root.form.spin get] password [.root.form.password get]]",
+          "    set values [list entry [.imeViewport.content.form.entry get] initial [.imeViewport.content.form.initial get] text [.imeViewport.content.form.text get 1.0 {end-1c}] spinbox [.imeViewport.content.form.spin get] password [.imeViewport.content.form.password get]]",
           "    return [list shortcut $source $action widget $widget focus [focus] values $values]",
           "}",
           "proc ::imeSample::recordShortcut {source action widget} {",
           "    set summary [::imeSample::shortcutSummary $source $action $widget]",
-          "    if {[winfo exists .root.status.value]} {.root.status.value configure -text $summary}",
+          "    if {[winfo exists .imeViewport.content.status.value]} {.imeViewport.content.status.value configure -text $summary}",
           "    browser::setResult $summary",
           "}",
           "proc ::imeSample::installShortcutObservers {} {",
@@ -384,11 +429,11 @@ list ok [winfo children .]</textarea>
           "}",
           "proc ::imeSample::setCheckOutput {lines} {",
           "    set text [join $lines \\n]",
-          "    if {[winfo exists .root.checks.output]} {",
-          "        .root.checks.output configure -state normal",
-          "        .root.checks.output delete 1.0 end",
-          "        .root.checks.output insert end $text",
-          "        .root.checks.output configure -state disabled",
+          "    if {[winfo exists .imeViewport.content.checks.output]} {",
+          "        .imeViewport.content.checks.output configure -state normal",
+          "        .imeViewport.content.checks.output delete 1.0 end",
+          "        .imeViewport.content.checks.output insert end $text",
+          "        .imeViewport.content.checks.output configure -state disabled",
           "    }",
           "    browser::setResult $text",
           "}",
@@ -406,19 +451,20 @@ list ok [winfo children .]</textarea>
           "    return $lines",
           "}",
           "proc ::imeSample::drawComplexCanvas {} {",
-          "    if {![winfo exists .root.checks.canvas]} {return {}}",
+          "    if {![winfo exists .imeViewport.content.checks.canvas]} {return {}}",
           "    set font [::imeSample::complexFont]",
-          "    .root.checks.canvas delete all",
+          "    .imeViewport.content.checks.canvas delete all",
           "    set y 24",
           "    foreach case [::imeSample::complexCases] {",
           "        lassign $case name text segments",
-          "        .root.checks.canvas create text 10 $y -anchor w -text [format {%s: %s} $name $text] -font $font -fill black",
+          "        .imeViewport.content.checks.canvas create text 10 $y -anchor w -text [format {%s: %s} $name $text] -font $font -fill black",
           "        incr y 28",
           "    }",
+          "    .imeViewport.content.checks.canvas configure -scrollregion [.imeViewport.content.checks.canvas bbox all]",
           "    return drawn",
           "}",
           "proc ::imeSample::caretReport {} {",
-          "    set entry .root.checks.caretEntry",
+          "    set entry .imeViewport.content.checks.caretEntry",
           "    set font [::imeSample::complexFont]",
           "    set lines [list {entry caret advance}]",
           "    if {![winfo exists $entry]} {",
@@ -505,51 +551,57 @@ list ok [winfo children .]</textarea>
           "    ::imeSample::setCheckOutput $lines",
           "    return $lines",
           "}",
-          "frame .root -background white -padx 16 -pady 16",
-          "label .root.title -text {Tcl/Tk WASM IME Sample} -font {Helvetica 18 bold} -background white",
-          "label .root.body -text {Focus each field and test composition, conversion, cursor movement, and commit behavior.} -background white -anchor w -justify left",
-          "frame .root.form -background white",
-          "label .root.form.entryLabel -text {Entry} -background white -anchor e",
-          "entry .root.form.entry -width 42",
-          "label .root.form.initialLabel -text {Entry with text} -background white -anchor e",
-          "entry .root.form.initial -width 42",
-          ".root.form.initial insert end {日本語の初期値 abc 123}",
-          "label .root.form.textLabel -text {Text} -background white -anchor ne",
-          "text .root.form.text -width 42 -height 5 -wrap char",
-          ".root.form.text insert 1.0 {ここで日本語 IME の変換、確定、改行、カーソル移動を試してください。}",
-          "label .root.form.spinLabel -text {Spinbox} -background white -anchor e",
-          "spinbox .root.form.spin -values {かな カナ 漢字 alphabet 12345} -width 40",
-          "label .root.form.passwordLabel -text {Password entry} -background white -anchor e",
-          "entry .root.form.password -show * -width 42",
-          "grid .root.form.entryLabel -row 0 -column 0 -sticky e -padx {0 8} -pady 4",
-          "grid .root.form.entry -row 0 -column 1 -sticky ew -pady 4",
-          "grid .root.form.initialLabel -row 1 -column 0 -sticky e -padx {0 8} -pady 4",
-          "grid .root.form.initial -row 1 -column 1 -sticky ew -pady 4",
-          "grid .root.form.textLabel -row 2 -column 0 -sticky ne -padx {0 8} -pady 4",
-          "grid .root.form.text -row 2 -column 1 -sticky nsew -pady 4",
-          "grid .root.form.spinLabel -row 3 -column 0 -sticky e -padx {0 8} -pady 4",
-          "grid .root.form.spin -row 3 -column 1 -sticky ew -pady 4",
-          "grid .root.form.passwordLabel -row 4 -column 0 -sticky e -padx {0 8} -pady 4",
-          "grid .root.form.password -row 4 -column 1 -sticky ew -pady 4",
-          "grid columnconfigure .root.form 1 -weight 1",
-          "grid rowconfigure .root.form 2 -weight 1",
-          "frame .root.buttons -background white",
-          "button .root.buttons.report -text {Report values} -command {::imeSample::report}",
-          "button .root.buttons.clear -text {Clear fields} -command {::imeSample::clear}",
-          "button .root.buttons.result -text {Set result} -command {browser::setResult {button clicked}}",
-          "pack .root.buttons.report .root.buttons.clear .root.buttons.result -side left -padx {0 8}",
-          "frame .root.status -background white",
-          "label .root.status.label -text {Last input event:} -background white -anchor w",
-          "label .root.status.value -text {none} -background white -anchor w -justify left -wraplength 520",
-          "pack .root.status.label -side top -anchor w",
-          "pack .root.status.value -side top -fill x -anchor w",
-          "frame .root.checks -background white -borderwidth 1 -relief solid -padx 10 -pady 10",
-          "label .root.checks.title -text {Compatibility checks} -font {Helvetica 13 bold} -background white -anchor w",
-          "label .root.checks.caretLabel -text {Caret entry} -background white -anchor w",
-          "entry .root.checks.caretEntry -width 42 -font [::imeSample::complexFont] -foreground black -background white -insertbackground red -insertwidth 3 -insertofftime 0 -insertontime 60000",
-          ".root.checks.caretEntry insert end {123456789012345678901234567890123456}",
-          "canvas .root.checks.canvas -width 520 -height 150 -background white -highlightthickness 1 -highlightbackground #c8c8c8",
-          "frame .root.checks.buttons -background white",
+          "canvas .imeViewport -highlightthickness 0 -background white -yscrollcommand {.imeScroll set}",
+          "scrollbar .imeScroll -orient vertical -command {.imeViewport yview}",
+          "pack .imeScroll -side right -fill y",
+          "pack .imeViewport -side top -fill both -expand 1",
+          "frame .imeViewport.content -background white -padx 16 -pady 16",
+          "label .imeViewport.content.title -text {Tcl/Tk WASM IME Sample} -font {Helvetica 18 bold} -background white",
+          "label .imeViewport.content.body -text {Focus each field and test composition, conversion, cursor movement, and commit behavior.} -background white -anchor w -justify left",
+          "frame .imeViewport.content.form -background white",
+          "label .imeViewport.content.form.entryLabel -text {Entry} -background white -anchor e",
+          "entry .imeViewport.content.form.entry -width 42",
+          "label .imeViewport.content.form.initialLabel -text {Entry with text} -background white -anchor e",
+          "entry .imeViewport.content.form.initial -width 42",
+          ".imeViewport.content.form.initial insert end {日本語の初期値 abc 123}",
+          "label .imeViewport.content.form.textLabel -text {Text} -background white -anchor ne",
+          "text .imeViewport.content.form.text -width 42 -height 5 -wrap char",
+          ".imeViewport.content.form.text insert 1.0 {ここで日本語 IME の変換、確定、改行、カーソル移動を試してください。}",
+          "label .imeViewport.content.form.spinLabel -text {Spinbox} -background white -anchor e",
+          "spinbox .imeViewport.content.form.spin -values {かな カナ 漢字 alphabet 12345} -width 40",
+          "label .imeViewport.content.form.passwordLabel -text {Password entry} -background white -anchor e",
+          "entry .imeViewport.content.form.password -show * -width 42",
+          "grid .imeViewport.content.form.entryLabel -row 0 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .imeViewport.content.form.entry -row 0 -column 1 -sticky ew -pady 4",
+          "grid .imeViewport.content.form.initialLabel -row 1 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .imeViewport.content.form.initial -row 1 -column 1 -sticky ew -pady 4",
+          "grid .imeViewport.content.form.textLabel -row 2 -column 0 -sticky ne -padx {0 8} -pady 4",
+          "grid .imeViewport.content.form.text -row 2 -column 1 -sticky nsew -pady 4",
+          "grid .imeViewport.content.form.spinLabel -row 3 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .imeViewport.content.form.spin -row 3 -column 1 -sticky ew -pady 4",
+          "grid .imeViewport.content.form.passwordLabel -row 4 -column 0 -sticky e -padx {0 8} -pady 4",
+          "grid .imeViewport.content.form.password -row 4 -column 1 -sticky ew -pady 4",
+          "grid columnconfigure .imeViewport.content.form 1 -weight 1",
+          "grid rowconfigure .imeViewport.content.form 2 -weight 1",
+          "frame .imeViewport.content.buttons -background white",
+          "button .imeViewport.content.buttons.report -text {Report values} -command {::imeSample::report}",
+          "button .imeViewport.content.buttons.clear -text {Clear fields} -command {::imeSample::clear}",
+          "button .imeViewport.content.buttons.result -text {Set result} -command {browser::setResult {button clicked}}",
+          "pack .imeViewport.content.buttons.report .imeViewport.content.buttons.clear .imeViewport.content.buttons.result -side left -padx {0 8}",
+          "frame .imeViewport.content.status -background white",
+          "label .imeViewport.content.status.label -text {Last input event:} -background white -anchor w",
+          "label .imeViewport.content.status.value -text {none} -background white -anchor w -justify left -wraplength 520",
+          "pack .imeViewport.content.status.label -side top -anchor w",
+          "pack .imeViewport.content.status.value -side top -fill x -anchor w",
+          "frame .imeViewport.content.checks -background white -borderwidth 1 -relief solid -padx 10 -pady 10",
+          "label .imeViewport.content.checks.title -text {Compatibility checks} -font {Helvetica 13 bold} -background white -anchor w",
+          "label .imeViewport.content.checks.caretLabel -text {Caret entry} -background white -anchor w",
+          "entry .imeViewport.content.checks.caretEntry -width 42 -font [::imeSample::complexFont] -foreground black -background white -insertbackground red -insertwidth 3 -insertofftime 0 -insertontime 60000",
+          ".imeViewport.content.checks.caretEntry insert end {123456789012345678901234567890123456}",
+          "canvas .imeViewport.content.checks.canvas -width 520 -height 150 -background white -highlightthickness 1 -highlightbackground #c8c8c8",
+          "scrollbar .imeViewport.content.checks.horizontal -orient horizontal -command {.imeViewport.content.checks.canvas xview}",
+          ".imeViewport.content.checks.canvas configure -xscrollcommand {.imeViewport.content.checks.horizontal set}",
+          "frame .imeViewport.content.checks.buttons -background white",
           "foreach {name text command} {",
           "    run {Run checks} {::imeSample::runCompatibilityChecks}",
           "    metrics {Text metrics} {::imeSample::complexTextReport}",
@@ -564,27 +616,28 @@ list ok [winfo children .]</textarea>
           "    color {Color} {::imeSample::dialogReport color}",
           "    message {Message} {::imeSample::dialogReport message}",
           "} {",
-          "    button .root.checks.buttons.$name -text $text -command $command",
+          "    button .imeViewport.content.checks.buttons.$name -text $text -command $command",
           "}",
           "set buttonIndex 0",
           "foreach name {run metrics caret draw display fullscreen exitfull open save directory color message} {",
           "    set row [expr {$buttonIndex / 4}]",
           "    set column [expr {$buttonIndex % 4}]",
-          "    grid .root.checks.buttons.$name -row $row -column $column -sticky ew -padx {0 6} -pady 3",
+          "    grid .imeViewport.content.checks.buttons.$name -row $row -column $column -sticky ew -padx {0 6} -pady 3",
           "    incr buttonIndex",
           "}",
-          "foreach column {0 1 2 3} {grid columnconfigure .root.checks.buttons $column -weight 1 -uniform checkButtons}",
-          "text .root.checks.output -width 72 -height 8 -wrap word -background #f7f7f7 -state disabled",
-          "grid .root.checks.title -row 0 -column 0 -sticky ew -pady {0 6}",
-          "grid .root.checks.caretLabel -row 1 -column 0 -sticky ew",
-          "grid .root.checks.caretEntry -row 2 -column 0 -sticky ew -pady {2 8}",
-          "grid .root.checks.canvas -row 3 -column 0 -sticky ew -pady {0 8}",
-          "grid .root.checks.buttons -row 4 -column 0 -sticky ew -pady {0 8}",
-          "grid .root.checks.output -row 5 -column 0 -sticky nsew",
-          "grid columnconfigure .root.checks 0 -weight 1",
-          "grid rowconfigure .root.checks 5 -weight 1",
+          "foreach column {0 1 2 3} {grid columnconfigure .imeViewport.content.checks.buttons $column -weight 1 -uniform checkButtons}",
+          "text .imeViewport.content.checks.output -width 72 -height 8 -wrap word -background #f7f7f7 -state disabled",
+          "grid .imeViewport.content.checks.title -row 0 -column 0 -sticky ew -pady {0 6}",
+          "grid .imeViewport.content.checks.caretLabel -row 1 -column 0 -sticky ew",
+          "grid .imeViewport.content.checks.caretEntry -row 2 -column 0 -sticky ew -pady {2 8}",
+          "grid .imeViewport.content.checks.canvas -row 3 -column 0 -sticky ew -pady {0 8}",
+          "grid .imeViewport.content.checks.horizontal -row 4 -column 0 -sticky ew -pady {0 8}",
+          "grid .imeViewport.content.checks.buttons -row 5 -column 0 -sticky ew -pady {0 8}",
+          "grid .imeViewport.content.checks.output -row 6 -column 0 -sticky nsew",
+          "grid columnconfigure .imeViewport.content.checks 0 -weight 1",
+          "grid rowconfigure .imeViewport.content.checks 6 -weight 1",
           "::imeSample::drawComplexCanvas",
-          "foreach widget {.root.form.entry .root.form.initial .root.form.text .root.form.spin .root.form.password .root.checks.caretEntry} {",
+          "foreach widget {.imeViewport.content.form.entry .imeViewport.content.form.initial .imeViewport.content.form.text .imeViewport.content.form.spin .imeViewport.content.form.password .imeViewport.content.checks.caretEntry} {",
           "    bind $widget <FocusIn> {::imeSample::record focus %W {}}",
           "    bind $widget <KeyRelease> {::imeSample::record key %W {%A}}",
           "}",
@@ -592,14 +645,46 @@ list ok [winfo children .]</textarea>
           "bind all <<X11WasmCompositionUpdate>> {::imeSample::record composition-update %W {%d}}",
           "bind all <<X11WasmCompositionEnd>> {::imeSample::record composition-end %W {%d}}",
           "::imeSample::installShortcutObservers",
-          "pack .root.title -side top -anchor w -pady {0 4}",
-          "pack .root.body -side top -fill x -anchor w -pady {0 10}",
-          "pack .root.form -side top -fill both -expand 1",
-          "pack .root.buttons -side top -fill x -pady {10 6}",
-          "pack .root.status -side top -fill x -pady {6 0}",
-          "pack .root.checks -side top -fill both -expand 1 -pady {10 0}",
-          "pack .root -fill both -expand 1",
-          "focus -force .root.form.entry",
+          "pack .imeViewport.content.title -side top -anchor w -pady {0 4}",
+          "pack .imeViewport.content.body -side top -fill x -anchor w -pady {0 10}",
+          "pack .imeViewport.content.form -side top -fill both -expand 1",
+          "pack .imeViewport.content.buttons -side top -fill x -pady {10 6}",
+          "pack .imeViewport.content.status -side top -fill x -pady {6 0}",
+          "pack .imeViewport.content.checks -side top -fill both -expand 1 -pady {10 0}",
+          ".imeViewport create window 0 0 -anchor nw -window .imeViewport.content -tags content",
+          "proc ::imeSample::layout {width} {",
+          "    if {$width < 1} {return}",
+          "    .imeViewport itemconfigure content -width $width",
+          "    set contentWidth [expr {max(1, $width - 32)}]",
+          "    foreach widget {.imeViewport.content.title .imeViewport.content.body .imeViewport.content.status.value} {$widget configure -wraplength $contentWidth}",
+          "    .imeViewport.content.checks.canvas configure -width [expr {max(1, $contentWidth - 24)}]",
+          "    .imeViewport.content.checks.output configure -width 1",
+          "    .imeViewport.content.checks.caretEntry configure -width 1",
+          "    set index 0",
+          "    foreach {label widget} {entryLabel entry initialLabel initial textLabel text spinLabel spin passwordLabel password} {",
+          "        .imeViewport.content.form.$widget configure -width 1",
+          "        if {$width < 400} {",
+          "            grid .imeViewport.content.form.$label -row [expr {2 * $index}] -column 0 -columnspan 2 -sticky w",
+          "            grid .imeViewport.content.form.$widget -row [expr {2 * $index + 1}] -column 0 -columnspan 2 -sticky ew",
+          "        } else {",
+          "            grid .imeViewport.content.form.$label -row $index -column 0 -columnspan 1 -sticky e",
+          "            grid .imeViewport.content.form.$widget -row $index -column 1 -columnspan 1 -sticky ew",
+          "        }",
+          "        incr index",
+          "    }",
+          "    set side [expr {$width < 400 ? {top} : {left}}]",
+          "    foreach widget {report clear result} {pack .imeViewport.content.buttons.$widget -side $side -fill x -pady 2}",
+          "    set columns [expr {$width < 500 ? 2 : 4}]",
+          "    set index 0",
+          "    foreach name {run metrics caret draw display fullscreen exitfull open save directory color message} {",
+          "        grid .imeViewport.content.checks.buttons.$name -row [expr {$index / $columns}] -column [expr {$index % $columns}]",
+          "        incr index",
+          "    }",
+          "    foreach column {0 1 2 3} {grid columnconfigure .imeViewport.content.checks.buttons $column -weight [expr {$column < $columns ? 1 : 0}] -uniform [expr {$column < $columns ? {checkButtons} : {}}]}",
+          "}",
+          "bind .imeViewport <Configure> {::imeSample::layout %w}",
+          "bind .imeViewport.content <Configure> {.imeViewport configure -scrollregion [.imeViewport bbox content]}",
+          "focus -force .imeViewport.content.form.entry",
           "update",
           "list ready [winfo children .]"
         ].join("\n");
@@ -610,11 +695,93 @@ list ok [winfo children .]</textarea>
           "catch {destroy .demo}",
           "toplevel .demo",
           "wm title .demo {Demo Window}",
+          "wm geometry .demo +36+80",
           "label .demo.label -text {Hello from Tcl shell} -padx 16 -pady 10",
           "button .demo.close -text Close -command {destroy .demo}",
           "pack .demo.label .demo.close -side top -fill x",
           "update",
           "list demo [winfo children .]"
+        ].join("\n");
+      }
+
+      function windowManagerScript() {
+        return [
+          "namespace eval ::wmSample {",
+          "    variable windows {.wmNormal .wmDialog .wmUtility .wmTransient .wmPopup}",
+          "    variable closeAllowed 0",
+          "    variable closeRequests 0",
+          "    variable text {Window input}",
+          "}",
+          "proc ::wmSample::report {} {",
+          "    variable windows",
+          "    set result [list wm-sample]",
+          "    foreach window $windows {",
+          "        if {[winfo exists $window]} {",
+          "            lappend result [list $window [winfo id $window] [wm state $window] [wm geometry $window]]",
+          "        }",
+          "    }",
+          "    browser::setResult $result",
+          "    return $result",
+          "}",
+          "proc ::wmSample::close {window} {",
+          "    variable closeAllowed",
+          "    variable closeRequests",
+          "    incr closeRequests",
+          "    if {!$closeAllowed} {",
+          "        if {[winfo exists .wmNormal.status]} {.wmNormal.status configure -text {Close blocked}}",
+          "        browser::setResult [list close-rejected $window $closeRequests]",
+          "        return",
+          "    }",
+          "    destroy $window",
+          "    browser::setResult [list close-accepted $window $closeRequests]",
+          "}",
+          "proc ::wmSample::open {} {",
+          "    variable windows",
+          "    variable closeAllowed",
+          "    variable closeRequests",
+          "    set closeAllowed 0",
+          "    set closeRequests 0",
+          "    foreach window $windows {catch {destroy $window}}",
+          "    foreach {window title type geometry color} {",
+          "        .wmNormal {Normal window} normal 280x200+20+48 #eef8f0",
+          "        .wmDialog {Dialog window} dialog 220x110+48+60 #fff3f5",
+          "        .wmUtility {Utility window} utility 240x100+76+96 #f2effa",
+          "        .wmTransient {Grid transient} normal 240x140+100+130 #edf6ff",
+          "        .wmPopup {Popup} popup_menu 180x64+36+260 #fff8da",
+          "    } {",
+          "        toplevel $window -background $color",
+          "        wm title $window $title",
+          "        wm attributes $window -type $type",
+          "        wm geometry $window $geometry",
+          "        wm protocol $window WM_DELETE_WINDOW [list ::wmSample::close $window]",
+          "        label $window.title -text $title -background $color -padx 10 -pady 8",
+          "        pack $window.title -side top -fill x",
+          "    }",
+          "    entry .wmNormal.entry -textvariable ::wmSample::text -width 20",
+          "    checkbutton .wmNormal.allow -text {Allow close} -variable ::wmSample::closeAllowed -background #eef8f0",
+          "    label .wmNormal.status -text {Close blocked} -background #eef8f0",
+          "    button .wmNormal.report -text {Report windows} -command ::wmSample::report",
+          "    pack .wmNormal.entry .wmNormal.allow .wmNormal.status .wmNormal.report -side top -fill x -padx 10 -pady 3",
+          "    wm minsize .wmNormal 220 160",
+          "    wm maxsize .wmNormal 480 360",
+          "    wm aspect .wmNormal 4 3 16 9",
+          "    wm resizable .wmNormal 1 1",
+          "    wm transient .wmDialog .wmNormal",
+          "    wm resizable .wmDialog 0 0",
+          "    wm resizable .wmUtility 1 0",
+          "    wm transient .wmTransient .wmNormal",
+          "    update idletasks",
+          "    wm grid .wmTransient 24 8 8 16",
+          "    wm geometry .wmTransient 30x10+100+130",
+          "    wm overrideredirect .wmPopup 1",
+          "    button .wmPopup.close -text Close -command {destroy .wmPopup}",
+          "    pack .wmPopup.close -side top -fill x -padx 8 -pady 4",
+          "    foreach window $windows {raise $window}",
+          "    focus -force .wmNormal.entry",
+          "    update",
+          "    ::wmSample::report",
+          "}",
+          "::wmSample::open"
         ].join("\n");
       }
 
@@ -723,6 +890,19 @@ list ok [winfo children .]</textarea>
           await evalTcl(demoScript(), true);
         });
       }
+      if (managerSampleButton) {
+        managerSampleButton.addEventListener("click", async () => {
+          await evalTcl(windowManagerScript(), true);
+        });
+      }
+      if (managerToggle instanceof HTMLInputElement) {
+        managerToggle.addEventListener("change", () => {
+          const backend = globalThis.Module?.x11WasmBackend;
+          if (typeof backend?.setWindowManagerEnabled === "function") {
+            backend.setWindowManagerEnabled(managerToggle.checked);
+          }
+        });
+      }
       if (clearButton && outputElement) {
         clearButton.addEventListener("click", () => {
           outputElement.textContent = "";
@@ -753,6 +933,7 @@ list ok [winfo children .]</textarea>
           : [];
 
       module.x11WasmRoot = "#tk-browser-root";
+      module.x11WasmWindowManager = true;
       module.x11WasmServiceUserActivationEvents = function serviceUserActivationEvents() {
         const service = module._TkBrowserServiceUserActivationEvents;
         return typeof service === "function" ? service() : 0;
@@ -774,6 +955,10 @@ list ok [winfo children .]</textarea>
       };
       postRun.push(() => {
         setShellEnabled(true);
+        if (managerToggle instanceof HTMLInputElement) {
+          managerToggle.disabled = typeof module.x11WasmBackend?.setWindowManagerEnabled !== "function";
+          managerToggle.checked = !managerToggle.disabled;
+        }
         appendOutput("> ", "ready");
         if (commandElement instanceof HTMLTextAreaElement) {
           commandElement.focus();
