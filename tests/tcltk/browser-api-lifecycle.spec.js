@@ -114,3 +114,39 @@ test("mock native pickers preserve cancel and unavailable contracts before retry
     "ready" + "|0|0|1|TK BROWSER DIALOG_UNAVAILABLE|0|1".repeat(3),
   );
 });
+
+test("mock asynchronous save hook restores focus after denial and reuse", async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = /** @type {Window & { Module?: Record<string, unknown> }} */ (window);
+    const module = target.Module || {};
+    let calls = 0;
+    module.tkBrowserSaveFile = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const input = document.querySelector(".x11-wasm-input");
+      if (input instanceof HTMLElement) {
+        input.blur();
+      }
+      calls++;
+      if (calls === 1) {
+        throw new DOMException("save denied", "NotAllowedError");
+      }
+      return calls === 2 ? null : { name: "retry.txt" };
+    };
+    target.Module = module;
+  });
+  await runScript(page, [
+    "entry .target",
+    "set ::calls 0",
+    "button .save -text Save -command {incr ::calls; set code [catch {::browser::getSaveFile} value]; browser::setResult [list done $::calls $code]}",
+    "pack .target .save",
+    "focus -force .target",
+    "update",
+    "winfo id .save",
+  ].join("\n"));
+  const id = Number.parseInt(await page.locator("#tk-browser-result").innerText(), 0);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await page.locator(`[data-x11-wasm-xid="${id}"]`).click();
+    await expect(page.locator("#tk-browser-result")).toHaveText(`done ${attempt} ${attempt === 1 ? 1 : 0}`);
+    await expect(page.locator(".x11-wasm-input")).toBeFocused();
+  }
+});
