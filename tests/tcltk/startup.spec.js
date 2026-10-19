@@ -1,6 +1,7 @@
 // @ts-check
 
 const { test, expect } = require("@playwright/test");
+const { evalTcl } = require("../support/tcltk");
 
 /**
  * @param {import("@playwright/test").Page} page
@@ -253,9 +254,8 @@ test("Tk screen dimensions follow browser root element size", async ({
   await page.setViewportSize({ width: 840, height: 620 });
   const script = [
     "proc ::reportScreen {} {",
-    "  browser::setResult [list ready [winfo screenwidth .] [winfo screenheight .]]",
+    "  list ready [winfo screenwidth .] [winfo screenheight .]",
     "}",
-    "after 250 ::reportScreen",
     "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
@@ -265,9 +265,21 @@ test("Tk screen dimensions follow browser root element size", async ({
     timeout: 15000,
   });
   await page.setViewportSize({ width: 760, height: 560 });
-  await expect
-    .poll(async () => (await page.locator("#tk-browser-result").textContent()) || "")
-    .toMatch(/^ready /);
+  await page.waitForFunction(() => {
+    const root = document.getElementById("tk-browser-root");
+    const canvas = root?.querySelector(":scope > canvas");
+    const backend =
+      /** @type {Window & { Module?: { x11WasmBackend?: X11WasmBackendSnapshot & { rootWindow?: number } } }} */ (
+        window
+      ).Module?.x11WasmBackend;
+    const resource = backend?.resources.get(backend.rootWindow || 0);
+    return root && canvas instanceof HTMLCanvasElement &&
+      root.clientWidth > 0 && root.clientHeight > 0 &&
+      canvas.width === root.clientWidth && canvas.height === root.clientHeight &&
+      resource?.width === root.clientWidth && resource?.height === root.clientHeight;
+  });
+  await evalTcl(page, "::reportScreen");
+  await expect(page.locator("#tk-browser-result")).toHaveText(/^ready /);
 
   const result = (
     (await page.locator("#tk-browser-result").textContent()) || ""
