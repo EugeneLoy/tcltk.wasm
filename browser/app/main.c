@@ -878,6 +878,11 @@ EM_ASYNC_JS(char *, BrowserChooseOpenFile, (
 	return allocateString(paths.join("\n"));
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1217,6 +1222,11 @@ EM_ASYNC_JS(char *, BrowserChooseSaveFile, (
 	return allocateString(path);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1419,6 +1429,11 @@ EM_ASYNC_JS(char *, BrowserChooseDirectory, (
 	return allocateString(path);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 
@@ -1499,6 +1514,11 @@ EM_ASYNC_JS(char *, BrowserChooseColor, (
 	return allocateString(value);
     } catch (error) {
 	return errorResult(error);
+    } finally {
+	const backend = module.x11WasmBackend;
+	if (backend && typeof backend.restoreFocusedInput === "function") {
+	    backend.restoreFocusedInput({ suppressFocusEvent: true });
+	}
     }
 });
 

@@ -44,6 +44,35 @@ for (const [kind, command] of [
     await expect(page.locator('input[type="file"], input[type="color"]')).toHaveCount(0);
   });
 
+  test(`mock asynchronous ${kind} cancel restores Tk focus on repeated use`, async ({ page }) => {
+    await page.addInitScript(() => {
+      for (const name of ["showOpenFilePicker", "showDirectoryPicker"]) {
+        Object.defineProperty(window, name, { configurable: true, value: undefined });
+      }
+      HTMLInputElement.prototype.click = function () {
+        setTimeout(() => {
+          this.focus();
+          this.dispatchEvent(new Event("cancel"));
+        }, 30);
+      };
+    });
+    await runScript(page, [
+      "entry .target",
+      "set ::calls 0",
+      `button .choose -text Choose -command {incr ::calls; set code [catch {${command}} value]; browser::setResult [list done $::calls $code [string length $value]]}`,
+      "pack .target .choose",
+      "focus -force .target",
+      "update",
+      "winfo id .choose",
+    ].join("\n"));
+    const id = Number.parseInt(await page.locator("#tk-browser-result").innerText(), 0);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await page.locator(`[data-x11-wasm-xid="${id}"]`).click();
+      await expect(page.locator("#tk-browser-result")).toHaveText(`done ${attempt} 0 0`);
+      await expect(page.locator(".x11-wasm-input")).toBeFocused();
+    }
+    await expect(page.locator('input[type="file"], input[type="color"]')).toHaveCount(0);
+  });
 }
 
 test("mock native pickers preserve cancel and unavailable contracts before retry", async ({ page }) => {
