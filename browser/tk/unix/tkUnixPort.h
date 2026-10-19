@@ -16,6 +16,8 @@
 #define __UNIX__ 1
 #define TK_BROWSER 1
 #define TK_WASM_BROWSER 1
+#define TK_DRAW_IN_CONTEXT 1
+#define TK_LAYOUT_WITH_BASE_CHUNKS 1
 
 #include <stdio.h>
 #include <pwd.h>
