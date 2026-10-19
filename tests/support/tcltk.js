@@ -1,6 +1,26 @@
 // @ts-check
 
 const { expect } = require("@playwright/test");
+const path = require("node:path");
+
+/**
+ * Serve the real sample shell alongside the configured native build artifacts.
+ * @param {import("@playwright/test").Page} page
+ * @param {string=} script
+ */
+async function openTkApp(page, script) {
+  await page.route("**/app.html*", (route) => route.fulfill({
+    path: path.resolve(__dirname, "../../browser/app/app.html"),
+    contentType: "text/html",
+  }));
+  const query = script === undefined ? "" : `?${new URLSearchParams({ eval: script })}`;
+  await page.goto(`/app.html${query}`);
+  await expect(page.locator("#tcl-run")).toBeEnabled({ timeout: 15000 });
+  await page.waitForFunction(() => {
+    const target = /** @type {any} */ (window);
+    return target.Module.tkBrowserEvalResult !== undefined && !target.Asyncify?.currData;
+  });
+}
 
 /**
  * Evaluate after a browser action has completed, rather than racing a Tcl timer.
@@ -58,4 +78,4 @@ async function evalTcl(page, script) {
   return result.value;
 }
 
-module.exports = { evalTcl };
+module.exports = { evalTcl, openTkApp };
