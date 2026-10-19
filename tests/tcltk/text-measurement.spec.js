@@ -260,3 +260,126 @@ test("Tk native byte ranges retain embedded modified UTF-8 NUL", async ({ page }
   expect(whole, "bytes after NUL must still be measured").toBeGreaterThan(results[1][1]);
   expect(whole).toBe(results[5][1] + results[2][1] + results[3][1]);
 });
+
+for (const [name, prefix] of clusters) {
+  test(`Tk ${name} wrap preserves glyphs at fitting and undersized widths`, async ({ page }) => {
+    await openTextPage(page, [
+      `set prefix {${prefix}}`,
+      "canvas .c -width 260 -height 70 -background white -highlightthickness 0",
+      "canvas .w -width 260 -height 200 -background white -highlightthickness 0",
+      "frame .holder -width 260 -height 200",
+      "pack .c .w .holder -anchor w",
+      ".c create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      "text .holder.t -font {Helvetica -32} -wrap char -background white -borderwidth 0 -highlightthickness 0 -padx 0 -pady 0 -insertwidth 0",
+      "update",
+    ].join("\n"));
+    const run = await drawnTextRun(page, prefix);
+    for (const width of [run.advance * 2, run.advance - 1, 1]) {
+      await page.evaluate(() => { window.__textOracle.fills.length = 0; });
+      const values = (await evalText(page, [
+        ".w delete all",
+        `set width ${width}`,
+        "set value [string repeat $prefix 3]",
+        ".w create text 12 8 -anchor nw -width $width -text $value -font {Helvetica -32}",
+        "place .holder.t -x 0 -y 0 -width $width -height 200",
+        ".holder.t delete 1.0 end",
+        ".holder.t insert 1.0 $value",
+        "update",
+        "join [list [binary encode hex [encoding convertto utf-8 [.holder.t get 1.0 end-1c]]] [.holder.t count -displaylines 1.0 end] [winfo id .w]] |",
+      ].join("\n"))).split("|");
+      expect(values[0], `width=${width}: text content survives wrapping`)
+        .toBe(Buffer.from(prefix.repeat(3)).toString("hex"));
+      expect(Number(values[1]), "wrapping must make finite forward progress")
+        .toBeLessThanOrEqual(prefix.length * 3 + 1);
+      const fills = await page.evaluate(() => {
+        window.Module.x11WasmBackend.flush();
+        return Array.from(new Map(window.__textOracle.fills
+          .map((fill) => [JSON.stringify(fill), fill])).values());
+      });
+      const complex = fills.filter((fill) => fill.font.startsWith("32px "));
+      expect(complex.length, `width=${width}: a nonempty scene is required`)
+        .toBeGreaterThanOrEqual(3);
+      expect(complex.map((fill) => fill.text), `width=${width}: no re-shaped tail glyphs`)
+        .not.toContain("\ufffd");
+      expect(complex.every((fill) => fill.text === prefix),
+        `width=${width}: complete glyphs only: ${JSON.stringify(complex)}`).toBe(true);
+      const lines = new Set(complex.map((fill) => fill.y));
+      expect(lines.size, `width=${width}: paint must actually wrap`).toBeGreaterThan(1);
+      expect((await pixelBounds(page, Number(values[2]))).count).toBeGreaterThan(20);
+    }
+  });
+
+  test(`Tk ${name} underline and xview track painted cluster boundaries`, async ({ page }) => {
+    await openTextPage(page, [
+      `set prefix {${prefix}}`,
+      "canvas .c -width 300 -height 70 -background white -highlightthickness 0",
+      "canvas .under -width 300 -height 70 -background white -highlightthickness 0",
+      "entry .e -font {Helvetica -32} -width 4 -background white -borderwidth 0 -highlightthickness 0",
+      "text .t -font {Helvetica -32} -width 4 -height 2 -wrap none -background white -borderwidth 0 -highlightthickness 0 -padx 0 -pady 0",
+      "pack .c .under .e .t -anchor w",
+      ".c create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      ".under create text 12 35 -anchor w -text $prefix -font {Helvetica -32 underline}",
+      "set value [string repeat $prefix 12]",
+      ".e insert 0 $value",
+      ".t insert 1.0 $value",
+      "update",
+    ].join("\n"));
+    const run = await drawnTextRun(page, prefix);
+    const underlines = await page.evaluate(() => window.__textOracle.rectangles
+      .filter((rect) => rect.color === "#000000" && rect.height > 0 && rect.height <= 3));
+    expect(underlines.some((rect) => rect.width === run.advance),
+      `underline extent must equal actual glyph advance: ${JSON.stringify(underlines)}`).toBe(true);
+    const n = prefix.length * 6;
+    const values = (await evalText(page, [
+      `.e xview ${n}`,
+      ".t xview moveto 0.5",
+      "update",
+      `join [list [lindex [.e bbox ${n}] 0] [lindex [.e bbox [expr {${n}+[string length $prefix]}]] 0] [lindex [.t bbox 1.${n}] 0] [lindex [.t bbox 1.[expr {${n}+[string length $prefix]}]] 0]] |`,
+    ].join("\n"))).split("|").map(Number);
+    expect(values.every(Number.isFinite), "scrolled cluster boundaries remain visible").toBe(true);
+    expect(values[1] - values[0], "entry xview retains one painted cluster width")
+      .toBe(run.advance);
+    expect(values[3] - values[2], "text xview retains one painted cluster width")
+      .toBe(run.advance);
+  });
+
+  test(`Tk canvas ${name} bbox, caret, selection and hits use full context`, async ({ page }) => {
+    const values = (await openTextPage(page, [
+      `set prefix {${prefix}}`,
+      "set n [string length $prefix]",
+      "canvas .reference -width 300 -height 70 -background white -highlightthickness 0",
+      "canvas .c -width 300 -height 80 -background white -highlightthickness 0 -selectbackground #00ff00 -selectforeground black -selectborderwidth 0 -insertbackground #ff00ff -insertwidth 2 -insertofftime 0",
+      "pack .reference .c -anchor w",
+      ".reference create text 12 35 -anchor w -text ${prefix}| -font {Helvetica -32}",
+      "set item [.c create text 40 12 -anchor nw -text ${prefix}M -font {Helvetica -32}]",
+      ".c select from $item 0",
+      ".c select to $item [expr {$n-1}]",
+      ".c icursor $item $n",
+      ".c focus $item",
+      "focus -force .c",
+      "update",
+      "join [concat [list [winfo id .c] [.c index $item insert] [.c index $item sel.first] [.c index $item sel.last]] [.c bbox $item]] |",
+    ].join("\n"))).split("|").map(Number);
+    const run = await drawnTextRun(page, prefix);
+    expect(values.slice(1, 4)).toEqual([prefix.length, 0, prefix.length - 1]);
+    const selection = await pixelBounds(page, values[0], "green");
+    expect(selection.count).toBeGreaterThan(0);
+    expect(selection.left).toBe(40);
+    expect(selection.width, "selection covers the drawn cluster, not an isolated tail")
+      .toBe(run.advance);
+    const caret = await pixelBounds(page, values[0], "magenta");
+    expect(caret.count, "caret must actually be painted").toBeGreaterThan(0);
+    expect(caret.left).toBe(40 + run.advance - 1);
+    const widths = await evalText(page, "font measure {Helvetica -32} M");
+    // Canvas text bboxes include one pixel of padding on each side.
+    expect(values[6] - values[4]).toBe(run.advance + Number(widths) + 2);
+    for (const delta of [-1, 0, 1]) {
+      const index = Number(await evalText(page, `.c index $item @${40 + run.advance + delta},20`));
+      if (delta >= 0) expect(index).toBeGreaterThanOrEqual(1);
+      expect(index).toBeLessThanOrEqual(prefix.length);
+    }
+    const selected = await evalText(page,
+      "binary encode hex [encoding convertto utf-8 [selection get -selection PRIMARY]]");
+    expect(selected).toBe(Buffer.from(prefix).toString("hex"));
+  });
+}
