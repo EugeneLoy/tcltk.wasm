@@ -82,7 +82,7 @@ rule link_browser_app
   description = link browser app
 
 rule stage_browser_licenses
-  command = mkdir -p "$browser_dist/LICENSES/x11.wasm/LICENSES" && cp LICENSE THIRD_PARTY_NOTICES.md "$browser_dist/" && cp LICENSES/*.txt "$browser_dist/LICENSES/" && cp "$x11_src/LICENSE" "$x11_src/THIRD_PARTY_NOTICES.md" "$browser_dist/LICENSES/x11.wasm/" && cp "$x11_src/LICENSES/X11.txt" "$x11_src/LICENSES/Tk.txt" "$browser_dist/LICENSES/x11.wasm/LICENSES/"
+  command = mkdir -p "$browser_dist/LICENSES/x11.wasm/LICENSES" && cp LICENSE THIRD_PARTY_NOTICES.md "$browser_dist/" && cp LICENSES/*.txt "$browser_dist/LICENSES/" && cp "$x11_src/LICENSE" "$x11_src/THIRD_PARTY_NOTICES.md" "$browser_dist/LICENSES/x11.wasm/" && cp "$x11_src/LICENSES/X11.txt" "$x11_src/LICENSES/Tk.txt" "$x11_src/LICENSES/Lucide.txt" "$browser_dist/LICENSES/x11.wasm/LICENSES/"
   description = collect Tcl/Tk browser licenses
 
 build $browser_dist/LICENSE $
@@ -95,12 +95,13 @@ build $browser_dist/LICENSE $
   $browser_dist/LICENSES/x11.wasm/LICENSE $
   $browser_dist/LICENSES/x11.wasm/THIRD_PARTY_NOTICES.md $
   $browser_dist/LICENSES/x11.wasm/LICENSES/X11.txt $
-  $browser_dist/LICENSES/x11.wasm/LICENSES/Tk.txt: stage_browser_licenses $
+  $browser_dist/LICENSES/x11.wasm/LICENSES/Tk.txt $
+  $browser_dist/LICENSES/x11.wasm/LICENSES/Lucide.txt: stage_browser_licenses $
   LICENSE THIRD_PARTY_NOTICES.md $
   LICENSES/Tcl.txt LICENSES/Tk.txt LICENSES/Tcl-Tk-extra.txt $
   LICENSES/LibTomMath.txt LICENSES/zlib.txt $
   $x11_src/LICENSE $x11_src/THIRD_PARTY_NOTICES.md $
-  $x11_src/LICENSES/X11.txt $x11_src/LICENSES/Tk.txt
+  $x11_src/LICENSES/X11.txt $x11_src/LICENSES/Tk.txt $x11_src/LICENSES/Lucide.txt
 
 build $tcl_overlay_unix_stamp: overlay_tcl_unix build.ninja browser/tcl/unix/tclUnixTime.c
 build $tcl_build/Makefile: configure_tcl build.ninja $configure_tools/uname
