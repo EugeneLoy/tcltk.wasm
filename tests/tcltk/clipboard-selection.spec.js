@@ -1,6 +1,7 @@
 // @ts-check
 
 const { test, expect } = require("@playwright/test");
+const { evalTcl } = require("../support/tcltk");
 
 test("Tk clipboard selection roundtrips inside the browser port", async ({
   page,
@@ -368,11 +369,11 @@ test("Tk clipboard get reads text cached from browser paste", async ({
   const value = "external clipboard \u3042\u3044\u3046";
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboard {} {",
     "  set status [catch {clipboard get} value]",
-    "  browser::setResult [list ready $status $value]",
+    "  list ready $status $value",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -410,6 +411,7 @@ test("Tk clipboard get reads text cached from browser paste", async ({
     };
   }, value);
   expect(cached).toEqual({ available: true, text: value });
+  await evalTcl(page, "::reportClipboard");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 {${value}}`,
     { timeout: 15000 },
@@ -626,11 +628,11 @@ test("Tk clipboard get reads text synced from navigator clipboard", async ({
 
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboard {} {",
     "  set status [catch {clipboard get} value]",
-    "  browser::setResult [list ready $status $value]",
+    "  list ready $status $value",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -665,6 +667,7 @@ test("Tk clipboard get reads text synced from navigator clipboard", async ({
   expect(synced.reads).toBeGreaterThanOrEqual(1);
   expect(synced.status).toBe("read");
   expect(synced.text).toBe(value);
+  await evalTcl(page, "::reportClipboard");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 {${value}}`,
     { timeout: 15000 },
@@ -677,8 +680,7 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
   const value = "external clipboard targets";
   const script = [
     "package require Tk",
-    "browser::setResult waiting",
-    "after 1000 {",
+    "proc ::reportClipboardTargets {} {",
     "  set targetsStatus [catch {selection get -selection CLIPBOARD -type TARGETS} targets]",
     "  set timestampStatus [catch {selection get -selection CLIPBOARD -type TIMESTAMP} timestamp]",
     "  set stringStatus [catch {selection get -selection CLIPBOARD -type STRING} stringText]",
@@ -692,8 +694,9 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
     "  set hasTargets [expr {$targetsStatus == 0 && {TARGETS} in $targets}]",
     "  set hasTimestamp [expr {$targetsStatus == 0 && {TIMESTAMP} in $targets}]",
     "  set timestampIsInteger [expr {$timestampStatus == 0 && [string is integer -strict $timestamp]}]",
-    "  browser::setResult [list ready $targetsStatus $hasString $hasUtf8 $hasText $hasCompound $hasTargets $hasTimestamp $timestampStatus $timestampIsInteger $stringStatus $stringText $textStatus $text $compoundStatus $compoundText $utf8Status $utf8Text]",
+    "  list ready $targetsStatus $hasString $hasUtf8 $hasText $hasCompound $hasTargets $hasTimestamp $timestampStatus $timestampIsInteger $stringStatus $stringText $textStatus $text $compoundStatus $compoundText $utf8Status $utf8Text",
     "}",
+    "list waiting",
   ].join("\n");
   const query = new URLSearchParams({ eval: script }).toString();
 
@@ -722,6 +725,7 @@ test("Tk browser paste selection advertises targets and timestamp", async ({
     input.dispatchEvent(event);
   }, value);
 
+  await evalTcl(page, "::reportClipboardTargets");
   await expect(page.locator("#tk-browser-result")).toHaveText(
     `ready 0 1 1 1 1 1 1 0 1 0 {${value}} 0 {${value}} 0 {${value}} 0 {${value}}`,
     { timeout: 15000 },

@@ -6,7 +6,7 @@ module.exports = {
   ...base,
   fullyParallel: true,
   testDir: path.resolve(__dirname, "../tcltk"),
-  grep: /Tk screen dimensions follow browser root element size/,
+  grep: /Tk screen dimensions follow browser root element size|Tk clipboard get reads text cached from browser paste|Tk clipboard get reads text synced from navigator clipboard|Tk browser paste selection advertises targets and timestamp/,
   use: {
     ...base.use,
     launchOptions: { slowMo: 1500 },
