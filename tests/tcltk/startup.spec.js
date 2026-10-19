@@ -47,6 +47,55 @@ test("Tcl/Tk browser harness reaches running state", async ({ page }) => {
   ).toBeGreaterThan(0);
 });
 
+test("Tcl test helper waits for native evaluation completion", async ({ page }) => {
+  const query = new URLSearchParams({ eval: "set ::helperSeed ready" });
+  await page.goto(`/tcltk.html?${query}`);
+  await expect(page.locator("#tk-browser-status")).toHaveText("eval ok", {
+    timeout: 15000,
+  });
+  await page.evaluate(() => {
+    const target = /** @type {any} */ (window);
+    const module = target.Module;
+    const evalFn = module._TkBrowserEval;
+    const free = module._free;
+    const calls = [];
+    const frees = [];
+    let pointer = 0;
+    target.__helperTest = { calls, frees };
+    module._TkBrowserEval = (value) => {
+      pointer = value;
+      const code = evalFn(value);
+      calls.push({ code, pending: !!target.Asyncify.currData });
+      return code;
+    };
+    module._free = (value) => {
+      if (value === pointer) frees.push({ pending: !!target.Asyncify.currData });
+      free(value);
+    };
+  });
+  try {
+    expect(await evalTcl(page, "update; set ::helperValue {helper complete}")).toBe("helper complete");
+    await expect(evalTcl(page, "update; error {helper async failure}")).rejects.toThrow(/helper async failure/);
+    expect(await evalTcl(page, "expr {6 * 7}")).toBe("42");
+    const state = await page.evaluate(() => /** @type {any} */ (window).__helperTest);
+    expect(state.calls.slice(0, 2)).toEqual([
+      { code: 0, pending: true },
+      { code: 0, pending: true },
+    ]);
+    expect(state.frees).toEqual([
+      { pending: false }, { pending: false }, { pending: false },
+    ]);
+  } finally {
+    // Drain only a broken caller so a regression cannot leak into teardown.
+    await page.evaluate(async () => {
+      const target = /** @type {any} */ (window);
+      if (target.Asyncify.currData && !target.Asyncify.asyncPromiseHandlers) {
+        await target.Asyncify.whenDone();
+      }
+    });
+  }
+});
+
 test("Tk startup options are separated from browser eval scripts", async ({
   page,
 }) => {

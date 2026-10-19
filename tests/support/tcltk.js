@@ -9,7 +9,10 @@ const { expect } = require("@playwright/test");
  */
 async function evalTcl(page, script) {
   const result = await page.evaluate(async (source) => {
-    const target = /** @type {Window & { HEAPU8?: Uint8Array, Module?: {
+    const target = /** @type {Window & {
+      HEAPU8?: Uint8Array, __tkTestEvalPending?: boolean,
+      Asyncify?: { currData?: number | null, whenDone: () => Promise<number> },
+      Module?: {
       _malloc?: (size: number) => number, _free?: (pointer: number) => void,
       _TkBrowserEval?: (pointer: number) => number | Promise<number>,
       HEAPU8?: Uint8Array, tkBrowserEvalResult?: string
@@ -18,22 +21,37 @@ async function evalTcl(page, script) {
     if (!module?._malloc || !module._free || !module._TkBrowserEval) {
       throw new Error("missing Tcl evaluation hooks");
     }
-    const bytes = new TextEncoder().encode(source);
-    const pointer = module._malloc(bytes.length + 1);
-    if (!pointer) {
-      throw new Error("failed to allocate Tcl script");
+    if (target.__tkTestEvalPending) {
+      throw new Error("Tcl evaluation is already in progress");
     }
+    target.__tkTestEvalPending = true;
+    let pointer = 0;
     try {
+      // Native polling may already own Asyncify's single completion waiter.
+      while (target.Asyncify?.currData) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      const bytes = new TextEncoder().encode(source);
+      pointer = module._malloc(bytes.length + 1);
+      if (!pointer) {
+        throw new Error("failed to allocate Tcl script");
+      }
       const heap = target.HEAPU8 || module.HEAPU8;
       if (!heap) {
         throw new Error("missing Tcl wasm heap");
       }
       heap.set(bytes, pointer);
       heap[pointer + bytes.length] = 0;
-      const code = await module._TkBrowserEval(pointer);
+      let code = module._TkBrowserEval(pointer);
+      if (typeof code !== "number") {
+        code = await code;
+      } else if (target.Asyncify?.currData) {
+        code = await target.Asyncify.whenDone();
+      }
       return { code, value: module.tkBrowserEvalResult };
     } finally {
-      module._free(pointer);
+      if (pointer) module._free(pointer);
+      target.__tkTestEvalPending = false;
     }
   }, script);
   expect(result.code, result.value).toBe(0);
