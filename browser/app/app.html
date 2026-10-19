@@ -291,6 +291,7 @@ list ok [winfo children .]</textarea>
       const demoButton = document.getElementById("tcl-demo");
       const clearButton = document.getElementById("tcl-clear");
       let runtimeReady = false;
+      let evaluationPending = false;
       let history = [];
       let historyIndex = 0;
 
@@ -312,10 +313,10 @@ list ok [winfo children .]</textarea>
       function setShellEnabled(enabled) {
         runtimeReady = enabled;
         if (runButton) {
-          runButton.disabled = !enabled;
+          runButton.disabled = !enabled || evaluationPending;
         }
         if (demoButton) {
-          demoButton.disabled = !enabled;
+          demoButton.disabled = !enabled || evaluationPending;
         }
       }
 
@@ -655,15 +656,29 @@ list ok [winfo children .]</textarea>
           appendOutput("! ", "Tcl runtime is not ready");
           return code;
         }
+        if (evaluationPending) {
+          appendOutput("! ", "Tcl evaluation is already in progress");
+          return code;
+        }
+        evaluationPending = true;
+        setShellEnabled(runtimeReady);
         if (echo) {
           appendOutput("% ", script);
         }
         try {
+          // Other native calls may own Asyncify's single completion waiter.
+          while (globalThis.Asyncify?.currData) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
           pointer = writeCString(script);
           const value = evalFn(pointer);
-          code = value && typeof value.then === "function"
-            ? await value
-            : value;
+          if (value && typeof value.then === "function") {
+            code = await value;
+          } else if (globalThis.Asyncify?.currData) {
+            code = await globalThis.Asyncify.whenDone();
+          } else {
+            code = value;
+          }
         } catch (error) {
           appendOutput("! ", error instanceof Error ? error.message : String(error));
           return 1;
@@ -671,6 +686,8 @@ list ok [winfo children .]</textarea>
           if (pointer && typeof free === "function") {
             free(pointer);
           }
+          evaluationPending = false;
+          setShellEnabled(runtimeReady);
         }
         appendOutput(code === 0 ? "= " : "! ",
           module.tkBrowserEvalResult || (resultElement ? resultElement.textContent : ""));
