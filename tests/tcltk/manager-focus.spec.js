@@ -38,21 +38,18 @@ async function openActualTkManager(page) {
       nativeFocus: module._X11WasmTestManagerFocusWindow(),
       secondFrame: module._X11WasmManagerWindowIdentity(secondClient, 0) };
   }, { client, secondClient });
-  if (process.env.PLAYWRIGHT_REQUIRE_MANAGER === "1") expect(state.missing).toEqual([]);
-  test.skip(state.missing.length > 0, `expected pending: ${state.missing.join(", ")}`);
+  expect(state.missing).toEqual([]);
   expect(state.frame).toBeGreaterThan(0);
   return { frame: state.frame, editor: Number(ready[2]), client, nativeFocus: state.nativeFocus,
     secondFrame: state.secondFrame, secondClient, secondEditor: Number(ready[4]) };
 }
 
-async function expectEditorFocus(page, editor, nativeTargets) {
-  const allowed = Array.isArray(nativeTargets) ? nativeTargets : [nativeTargets];
+async function expectEditorFocus(page, editor, nativeTarget) {
   await expect(page.locator(".x11-wasm-input")).toBeFocused();
   const readFocus = () => page.evaluate(() =>
     /** @type {any} */ (window).Module._X11WasmTestManagerFocusWindow());
-  await expect.poll(async () => allowed.includes(await readFocus())).toBe(true);
-  const nativeFocus = await readFocus();
-  await expect(page.locator(".x11-wasm-input")).toHaveAttribute("data-x11-wasm-focus-window", String(nativeFocus));
+  await expect.poll(readFocus).toBe(nativeTarget);
+  await expect(page.locator(".x11-wasm-input")).toHaveAttribute("data-x11-wasm-focus-window", String(nativeTarget));
   await expect(page.locator(".x11-wasm-input")).toHaveAttribute("data-x11-wasm-ic-window", String(editor));
 }
 
@@ -77,22 +74,22 @@ for (const activation of ["pointer", "keyboard"]) {
 }
 
 test("actual Tk titlebar activation preserves editor focus and accepts text", async ({ page }) => {
-  const { frame, editor, client, secondEditor } = await openActualTkManager(page);
+  const { frame, editor, secondEditor } = await openActualTkManager(page);
   await page.locator(`[data-x11-wasm-xid="${secondEditor}"]`).click({ position: { x: 10, y: 10 } });
   await page.keyboard.type("second");
   await expect(page.locator("#tk-browser-status")).toHaveText("typed .second.editor {} second");
   await page.locator(`[data-x11-wasm-frame="${frame}"] [data-x11-wasm-decoration="move"]`).click({ position: { x: 35, y: 10 } });
-  await expectEditorFocus(page, editor, [frame, client, editor]);
+  await expectEditorFocus(page, editor, frame);
   await page.keyboard.type("first");
   await expect(page.locator("#tk-browser-status")).toHaveText("typed .first.editor first second");
 });
 
 test("actual Tk background close refusal preserves the current editor focus", async ({ page }) => {
-  const { frame, secondFrame, secondClient, secondEditor } = await openActualTkManager(page);
+  const { frame, secondFrame, secondEditor } = await openActualTkManager(page);
   await page.locator(`[data-x11-wasm-xid="${secondEditor}"]`).click({ position: { x: 10, y: 10 } });
   await page.keyboard.type("keep");
   await expect(page.locator("#tk-browser-status")).toHaveText("typed .second.editor {} keep");
-  await expectEditorFocus(page, secondEditor, [secondFrame, secondClient, secondEditor]);
+  await expectEditorFocus(page, secondEditor, secondFrame);
   const nativeFocus = await page.evaluate(() => /** @type {any} */ (window).Module._X11WasmTestManagerFocusWindow());
   await page.locator(`[data-x11-wasm-frame="${frame}"] [data-x11-wasm-decoration="close"]`).click();
   await expect(page.locator("#tk-browser-result")).toHaveText("refused 1 1");
