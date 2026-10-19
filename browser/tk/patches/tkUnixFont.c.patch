@@ -1,9 +1,35 @@
 --- tkUnixFont.c
 +++ tkUnixFont.c
-@@ -1315,6 +1315,32 @@ Tk_DrawChars(
-     lastSubFontPtr = &fontPtr->subFontArray[0];
-     xStart = x;
--
+@@ -129,0 +130,4 @@
++
++#ifdef TK_WASM_BROWSER
++#include "tkBrowserFont.h"
++#endif
+@@ -1062,0 +1067,10 @@
++#ifdef TK_WASM_BROWSER
++    {
++	int measured = BrowserFontMeasure(fontPtr, source, numBytes, 0,
++		numBytes, maxLength, flags, lengthPtr);
++	if (measured >= 0) {
++	    return measured;
++	}
++    }
++#endif
++
+@@ -1242 +1256 @@
+-    TCL_UNUSED(int),		/* Maximum number of bytes to consider from
++    int numBytes,		/* Maximum number of bytes to consider from
+@@ -1263,0 +1278,9 @@
++#ifdef TK_WASM_BROWSER
++    int measured = BrowserFontMeasure((UnixFont *)tkfont, source, numBytes,
++	    rangeStart, rangeLength, maxLength, flags, lengthPtr);
++    if (measured >= 0) {
++	return measured;
++    }
++#else
++    (void)numBytes;
++#endif
+@@ -1316,0 +1340,26 @@
 +
 +#ifdef TK_WASM_BROWSER
 +    /*
@@ -30,7 +56,61 @@
 +	return;
 +    }
 +#endif
+@@ -1438 +1487 @@
+-    TCL_UNUSED(int),		/* Number of bytes in string. */
++    int numBytes,		/* Number of bytes in string. */
+@@ -1446,0 +1496,8 @@
++#ifdef TK_WASM_BROWSER
++    if (BrowserFontDrawContext((UnixFont *)tkfont, display, drawable, gc,
++	    source, numBytes, rangeStart, rangeLength, x, y) == 0) {
++	return;
++    }
++#else
++    (void)numBytes;
++#endif
+@@ -1466 +1523 @@
+-    TCL_UNUSED(int),		/* Number of bytes in string. */
++    int numBytes,		/* Number of bytes in string. */
+@@ -1476,0 +1534,7 @@
++#ifdef TK_WASM_BROWSER
++    BrowserDrawAngledChars(display, drawable, gc, tkfont, source, numBytes,
++	    rangeStart, rangeLength, x, y, angle);
++    return;
++#else
++    (void)numBytes;
++#endif
+@@ -3127,0 +3192 @@
++    int rangeStart, int rangeLength,
+@@ -3152,2 +3217,5 @@
+-	Tk_DrawChars(display, bitmap, bitmapGC, tkfont, source, numBytes, 0,
+-		fontPtr->fm.ascent);
++	if (BrowserFontDrawContext((UnixFont *)tkfont, display, bitmap, bitmapGC,
++		source, numBytes, rangeStart, rangeLength, 0, fontPtr->fm.ascent) < 0) {
++	    Tk_DrawChars(display, bitmap, bitmapGC, tkfont, source, numBytes, 0,
++		    fontPtr->fm.ascent);
++	}
+@@ -3195,2 +3263,2 @@
+-void
+-TkDrawAngledChars(
++static void
++BrowserDrawAngledChars(
+@@ -3209,0 +3278 @@
++    int rangeStart, int rangeLength,
+@@ -3214 +3283,4 @@
+-	Tk_DrawChars(display, drawable, gc, tkfont, source, numBytes, x, y);
++	if (BrowserFontDrawContext((UnixFont *)tkfont, display, drawable, gc,
++		source, numBytes, rangeStart, rangeLength, (int)x, (int)y) < 0) {
++	    Tk_DrawChars(display, drawable, gc, tkfont, source, numBytes, x, y);
++	}
+@@ -3220 +3292 @@
+-		numBytes, &srcWidth, &srcHeight);
++		numBytes, rangeStart, rangeLength, &srcWidth, &srcHeight);
+@@ -3395,0 +3468,8 @@
++void
++TkDrawAngledChars(Display *display, Drawable drawable, GC gc, Tk_Font tkfont,
++    const char *source, int numBytes, double x, double y, double angle)
++{
++    BrowserDrawAngledChars(display, drawable, gc, tkfont, source, numBytes,
++	    0, numBytes, x, y, angle);
++}
 +
- #ifdef TK_DRAW_CHAR_XWINDOW_CHECK
-     /*
-      * Get the window width so we can abort drawing outside of the window
