@@ -81,8 +81,7 @@ for (const [name, prefix] of clusters) {
         expect(x).toBeGreaterThanOrEqual(0);
         expect(x).toBeLessThanOrEqual(run.advance);
         if (delta >= 0) expect(x, "boundary hit affinity").toBe(run.advance);
-        else expect(x + width, "left hit must cover the painted pixel")
-          .toBeGreaterThanOrEqual(run.advance - 1);
+        else expect([0, run.advance], "left or right caret affinity").toContain(x);
       }
     }
     const boxes = (await evalText(page, [
@@ -101,6 +100,15 @@ for (const [name, prefix] of clusters) {
         if (i < prefix.length) expect(x + width).toBeLessThanOrEqual(run.advance);
         previous = x;
       }
+      const scalarUnits = prefix.codePointAt(0) > 0xffff ? 2 : 1;
+      const scalarBoxes = Array.from({ length: scalarUnits }, (_, index) => ({
+        x: boxes[index * 8 + offset] - origin,
+        width: boxes[index * 8 + offset + 2],
+      }));
+      expect(Math.min(...scalarBoxes.map((box) => box.x))).toBe(0);
+      expect(Math.max(...scalarBoxes.map((box) => box.x + box.width)),
+        "the first Unicode scalar's Tcl-unit union covers its painted glyph")
+        .toBe(run.advance);
     }
   });
 }
@@ -355,8 +363,6 @@ for (const [name, prefix] of clusters) {
       ".c select from $item 0",
       ".c select to $item [expr {$n-1}]",
       ".c icursor $item $n",
-      ".c focus $item",
-      "focus -force .c",
       "update",
       "join [concat [list [winfo id .c] [.c index $item insert] [.c index $item sel.first] [.c index $item sel.last]] [.c bbox $item]] |",
     ].join("\n"))).split("|").map(Number);
@@ -367,6 +373,7 @@ for (const [name, prefix] of clusters) {
     expect(selection.left).toBe(40);
     expect(selection.width, "selection covers the drawn cluster, not an isolated tail")
       .toBe(run.advance);
+    await evalText(page, ".c focus $item; focus -force .c; update");
     const caret = await pixelBounds(page, values[0], "magenta");
     expect(caret.count, "caret must actually be painted").toBeGreaterThan(0);
     expect(caret.left).toBe(40 + run.advance - 1);
