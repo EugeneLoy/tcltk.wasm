@@ -38,8 +38,13 @@ for (const action of ["destroy .holder", "wm withdraw .holder"]) {
     await expect(status).toHaveText("start|changed");
     await dispatch("compositionupdate", "late");
     await dispatch("compositionend", "late");
+    await page.locator(".x11-wasm-input").evaluate((element) => {
+      const input = /** @type {HTMLTextAreaElement} */ (element);
+      input.value = "n";
+      input.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "n" }));
+    });
     await page.keyboard.type("x");
-    await expect(status).toHaveText("start|changed|second-key x");
+    await expect(status).toHaveText("start|changed|second-key n|second-key x");
     expect(errors).toEqual([]);
   });
 }
